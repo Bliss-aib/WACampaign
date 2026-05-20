@@ -1,0 +1,46 @@
+import { NextResponse } from "next/server";
+import { supabase } from "@/lib/db/client";
+
+async function getBusinessId(userId: string) {
+  const { data } = await supabase.from("businesses").select("id").eq("user_id", userId).single();
+  return data?.id;
+}
+
+export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const userId = "dev-user";
+
+  const businessId = await getBusinessId(userId);
+  if (!businessId) return NextResponse.json({ error: "Business not found" }, { status: 404 });
+
+  const { id } = await params;
+  const { name, body, variables, imageUrls } = await req.json();
+
+  const { data, error } = await supabase
+    .from("templates")
+    .update({ name, body, variables: variables || [], image_urls: imageUrls || null })
+    .eq("id", id)
+    .eq("business_id", businessId)
+    .select()
+    .single();
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ template: data });
+}
+
+export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const userId = "dev-user";
+
+  const businessId = await getBusinessId(userId);
+  if (!businessId) return NextResponse.json({ error: "Business not found" }, { status: 404 });
+
+  const { id } = await params;
+
+  const { error } = await supabase
+    .from("templates")
+    .delete()
+    .eq("id", id)
+    .eq("business_id", businessId);
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ success: true });
+}
