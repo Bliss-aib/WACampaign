@@ -1,8 +1,38 @@
 import { NextResponse } from "next/server";
+import crypto from "crypto";
 import { supabase } from "@/lib/db/client";
 
 const VERIFY_TOKEN = process.env.META_WEBHOOK_VERIFY_TOKEN!;
 const APP_SECRET = process.env.META_APP_SECRET!;
+
+/**
+ * FIX #6: Verify that an incoming webhook POST genuinely came from Meta.
+ *
+ * Meta signs every webhook body with an HMAC-SHA256 using the app's App Secret
+ * and sends it in the `x-hub-signature-256` header as "sha256=<hex>". We
+ * recompute that signature over the EXACT raw request body and compare using a
+ * timing-safe comparison (to avoid timing attacks).
+ *
+ * Returns false when the signature is missing or doesn't match.
+ * If APP_SECRET is not configured (e.g. local dev), we skip verification and
+ * log a warning so the local environment keeps working — production must set it.
+ */
+function isValidMetaSignature(rawBody: string, signatureHeader: string | null): boolean {
+  if (!APP_SECRET) {
+    console.warn("[meta webhook] META_APP_SECRET not set — skipping signature verification (dev only).");
+    return true;
+  }
+  if (!signatureHeader) return false;
+
+  const expected =
+    "sha256=" + crypto.createHmac("sha256", APP_SECRET).update(rawBody, "utf8").digest("hex");
+
+  const a = Buffer.from(signatureHeader);
+  const b = Buffer.from(expected);
+  // timingSafeEqual throws if the buffers differ in length, so guard first.
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -19,10 +49,18 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
+    // FIX #6: Read the RAW body first. We must verify the signature against the
+    // exact bytes Meta sent — calling req.json() directly would re-serialize and
+    // break the HMAC comparison. We parse manually after verification passes.
+    const rawBody = await req.text();
+    const signature = req.headers.get("x-hub-signature-256");
 
-    // TODO: Verify X-Hub-Signature-256 with APP_SECRET
-    // const signature = req.headers.get("x-hub-signature-256");
+    if (!isValidMetaSignature(rawBody, signature)) {
+      console.warn("[meta webhook] Rejected request with invalid signature.");
+      return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+    }
+
+    const body = JSON.parse(rawBody);
 
     const entries = body.entry || [];
     for (const entry of entries) {
@@ -108,19 +146,21 @@ export async function POST(req: Request) {
 
             const contactName = contact?.name || from;
 
-            // Store incoming message (best-effort — table may not exist yet)
-            try {
-              await supabase.from("messages").insert({
-                business_id: business.id,
-                contact_phone: from,
-                contact_name: contactName,
-                text,
-                sender: "them",
-                created_at: new Date().toISOString(),
-              });
-            } catch {
-              // messages table doesn't exist yet — log and skip
-              console.log("Incoming message from", from, ":", text);
+            // FIX #5: Persist the incoming customer reply. The `messages` table
+            // is now created by migration 003_messages.sql. Supabase returns
+            // errors in the result object (it does not throw), so we check
+            // `error` explicitly and log it rather than silently dropping the
+            // message as the previous try/catch did.
+            const { error: insertError } = await supabase.from("messages").insert({
+              business_id: business.id,
+              contact_phone: from,
+              contact_name: contactName,
+              text,
+              sender: "them",
+              created_at: new Date().toISOString(),
+            });
+            if (insertError) {
+              console.error("Failed to store incoming message from", from, ":", insertError.message);
             }
           }
         }

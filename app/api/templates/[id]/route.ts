@@ -41,6 +41,19 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
     .eq("id", id)
     .eq("business_id", businessId);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) {
+    // FIX #3: Templates referenced by a campaign are protected by a
+    // foreign-key constraint (ON DELETE RESTRICT). Postgres returns error
+    // code 23503 in that case. Translate the raw DB error into a clear,
+    // user-friendly message instead of a generic 500 so the dashboard can
+    // explain WHY the delete was blocked.
+    if ((error as any).code === "23503") {
+      return NextResponse.json(
+        { error: "This template is used by one or more campaigns and can't be deleted. Delete those campaigns first." },
+        { status: 409 }
+      );
+    }
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
   return NextResponse.json({ success: true });
 }

@@ -12,7 +12,10 @@ const worker = new Worker(
     // Get campaign + business
     const { data: campaign } = await supabase
       .from("campaigns")
-      .select("*, businesses(*), templates(name, body)")
+      // FIX (campaign send): also fetch the template's `language` (correct Meta
+      // translation code, e.g. "en_US") and `variables` (the parameters the
+      // template actually declares) so we send the right number of parameters.
+      .select("*, businesses(*), templates(name, body, language, variables)")
       .eq("id", campaignId)
       .single();
 
@@ -61,16 +64,48 @@ const worker = new Worker(
         continue;
       }
 
-      // Build variables from contact
-      const variables: Record<string, string> = { name: contact.name };
+      // FIX (campaign send): Build template parameters from the variables the
+      // template ACTUALLY declares — not a blanket { name }. The old code always
+      // sent a "name" parameter, so a template with zero variables (like the
+      // sample "hello_world") was rejected with:
+      //   (#132000) Number of parameters does not match the expected number of params
+      // We iterate the template's declared variables (stored on the template row)
+      // in order, filling "name" from the contact and leaving others blank for now
+      // (future: source these from contact custom fields). If the template has no
+      // variables, we send none — which matches Meta's expectation.
+      const declaredVars: string[] = Array.isArray(campaign.templates?.variables)
+        ? (campaign.templates!.variables as string[])
+        : [];
+      const variables: Record<string, string> = {};
+      for (const v of declaredVars) {
+        variables[v] = v === "name" ? contact.name || "" : "";
+      }
+
+      // FIX #1: Meta identifies templates by their NAME, not by our internal DB id.
+      // Previously this passed `campaign.template_id` (a UUID), which made Meta reply
+      // "template not found" and every send failed. The template name is already
+      // loaded via the `templates(name, body)` join in the query above (line ~15),
+      // so we read it from there. Guard against a missing relation just in case.
+      const templateName = campaign.templates?.name;
+      if (!templateName) {
+        await supabase
+          .from("campaign_contacts")
+          .update({ status: "failed", error_message: "Template name missing" })
+          .eq("id", cc.id);
+        continue;
+      }
+
+      // FIX (campaign send): use the template's stored language code. Meta needs
+      // the exact translation (e.g. "en_US"); a wrong code yields error #132001.
+      const templateLanguage = campaign.templates?.language || "en_US";
 
       // Send message
       const { ok, data } = await sendWhatsAppMessage(
         accessToken,
         phoneNumberId,
         contact.phone_number,
-        campaign.template_id, // Note: Meta template name must match. In real app, store meta template name separately.
-        "en",
+        templateName, // FIX #1: pass the Meta template name (was campaign.template_id)
+        templateLanguage, // FIX: was hard-coded "en"
         variables
       );
 

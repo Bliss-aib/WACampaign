@@ -61,7 +61,15 @@ export function TemplateCard({
               <Pencil className="h-3.5 w-3.5" />
             </button>
             <button
-              onClick={() => onDelete(template.id)}
+              // FIX #3: The delete button used to fire immediately on a single
+              // click with no warning. Add a native confirm() prompt so an
+              // accidental click can't wipe a template. (A styled modal can
+              // replace this later, but confirm() is a safe, dependency-free guard.)
+              onClick={() => {
+                if (window.confirm(`Delete template "${template.name}"? This cannot be undone.`)) {
+                  onDelete(template.id);
+                }
+              }}
               className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-red-600 transition-colors"
               title="Delete"
             >
