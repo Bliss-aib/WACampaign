@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/db/client";
 import { encrypt } from "@/lib/encrypt";
+import { getUserId, getOrCreateBusinessId } from "@/lib/auth";
 
 export async function GET() {
-  const userId = "dev-user";
+  const userId = await getUserId();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  await getOrCreateBusinessId(userId);
 
   const { data, error } = await supabase
     .from("businesses")
@@ -17,7 +20,9 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const userId = "dev-user";
+  const userId = await getUserId();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  await getOrCreateBusinessId(userId);
 
   const { access_token, waba_id, phone_number_id, name } = await req.json();
 
@@ -42,7 +47,9 @@ export async function POST(req: Request) {
 }
 
 export async function DELETE() {
-  const userId = "dev-user";
+  const userId = await getUserId();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  await getOrCreateBusinessId(userId);
 
   const { error } = await supabase
     .from("businesses")

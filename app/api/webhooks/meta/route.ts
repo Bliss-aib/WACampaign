@@ -66,6 +66,39 @@ export async function POST(req: Request) {
     for (const entry of entries) {
       const changes = entry.changes || [];
       for (const change of changes) {
+        // FEATURE: Meta Template Management — sync approval results.
+        // When Meta finishes reviewing a template it sends a
+        // "message_template_status_update" event. We flip our local template's
+        // status to match (approved / rejected / paused / disabled) and store
+        // the rejection reason so the dashboard can show it.
+        if (change.field === "message_template_status_update") {
+          const v = change.value || {};
+          const metaTemplateId = v.message_template_id ? String(v.message_template_id) : null;
+          const metaTemplateName = v.message_template_name || null;
+          const event = String(v.event || "").toUpperCase(); // APPROVED | REJECTED | PAUSED | DISABLED | ...
+
+          const statusMap: Record<string, string> = {
+            APPROVED: "approved",
+            REJECTED: "rejected",
+            PAUSED: "paused",
+            DISABLED: "disabled",
+          };
+          const newStatus = statusMap[event];
+          if (newStatus) {
+            const update: any = { status: newStatus };
+            // Meta sends the reason under different keys depending on event.
+            update.rejection_reason =
+              newStatus === "rejected" ? v.reason || v.rejected_reason || "Rejected by Meta" : null;
+
+            // Match by Meta's template id when we have it; otherwise by name.
+            let q = supabase.from("templates").update(update);
+            q = metaTemplateId ? q.eq("meta_template_id", metaTemplateId) : q.eq("meta_template_name", metaTemplateName);
+            const { error: tplErr } = await q;
+            if (tplErr) console.error("Failed to sync template status:", tplErr.message);
+          }
+          continue; // handled this change
+        }
+
         if (change.field === "messages") {
           const value = change.value;
 

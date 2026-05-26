@@ -15,7 +15,9 @@ const worker = new Worker(
       // FIX (campaign send): also fetch the template's `language` (correct Meta
       // translation code, e.g. "en_US") and `variables` (the parameters the
       // template actually declares) so we send the right number of parameters.
-      .select("*, businesses(*), templates(name, body, language, variables)")
+      // FEATURE: also fetch `status` (only 'approved' templates may be sent) and
+      // `meta_template_name` (the exact name Meta knows the template by).
+      .select("*, businesses(*), templates(name, meta_template_name, status, body, language, variables)")
       .eq("id", campaignId)
       .single();
 
@@ -76,17 +78,33 @@ const worker = new Worker(
       const declaredVars: string[] = Array.isArray(campaign.templates?.variables)
         ? (campaign.templates!.variables as string[])
         : [];
+      // FEATURE (Option A): non-name variables come from the campaign's stored
+      // values (same for every recipient); {{name}} comes from the contact.
+      const campaignVars: Record<string, string> = campaign.variable_values || {};
       const variables: Record<string, string> = {};
       for (const v of declaredVars) {
-        variables[v] = v === "name" ? contact.name || "" : "";
+        variables[v] = v === "name" ? contact.name || "" : campaignVars[v] || "";
       }
 
-      // FIX #1: Meta identifies templates by their NAME, not by our internal DB id.
-      // Previously this passed `campaign.template_id` (a UUID), which made Meta reply
-      // "template not found" and every send failed. The template name is already
-      // loaded via the `templates(name, body)` join in the query above (line ~15),
-      // so we read it from there. Guard against a missing relation just in case.
-      const templateName = campaign.templates?.name;
+      // FEATURE: Only send templates Meta has APPROVED. Sending a 'local',
+      // 'pending', or 'rejected' template would fail at Meta with #132001
+      // ("does not exist in the translation"), so we fail fast with a clear
+      // reason instead of burning a send attempt.
+      if (campaign.templates?.status !== "approved") {
+        await supabase
+          .from("campaign_contacts")
+          .update({
+            status: "failed",
+            error_message: `Template is not approved by Meta (status: ${campaign.templates?.status || "unknown"})`,
+          })
+          .eq("id", cc.id);
+        continue;
+      }
+
+      // FIX #1 + FEATURE: Meta identifies templates by their NAME (not our DB id).
+      // Prefer `meta_template_name` (the normalized name Meta knows it by); fall
+      // back to the display name for the pre-existing sample template.
+      const templateName = campaign.templates?.meta_template_name || campaign.templates?.name;
       if (!templateName) {
         await supabase
           .from("campaign_contacts")

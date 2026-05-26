@@ -10,6 +10,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { User, Settings, LogOut } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 const STORAGE_KEY = "wacampaign-profile";
 
@@ -25,6 +27,7 @@ function getProfileName() {
 
 export function Header({ title }: { title: string }) {
   const [name, setName] = useState("");
+  const router = useRouter();
 
   useEffect(() => {
     setName(getProfileName());
@@ -32,6 +35,13 @@ export function Header({ title }: { title: string }) {
     window.addEventListener("storage", handleStorage);
     return () => window.removeEventListener("storage", handleStorage);
   }, []);
+
+  // FEATURE (Auth): real sign-out — clears the Supabase session then returns to sign-in.
+  const handleSignOut = async () => {
+    const supabase = createSupabaseBrowserClient();
+    await supabase.auth.signOut();
+    router.push("/sign-in");
+  };
 
   const initials = name
     .split(" ")
@@ -62,11 +72,14 @@ export function Header({ title }: { title: string }) {
               Profile & Settings
             </Link>
           </DropdownMenuItem>
-          <DropdownMenuItem asChild className="cursor-pointer text-zinc-700 focus:bg-zinc-50 focus:text-black">
-            <Link href="/" className="flex items-center gap-2">
+          <DropdownMenuItem
+            onClick={handleSignOut}
+            className="cursor-pointer text-zinc-700 focus:bg-zinc-50 focus:text-black"
+          >
+            <span className="flex items-center gap-2">
               <LogOut className="h-4 w-4" />
               Sign out
-            </Link>
+            </span>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

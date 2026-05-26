@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/db/client";
+import { getUserId, getOrCreateBusinessId } from "@/lib/auth";
 
 export async function GET() {
-  const userId = "dev-user";
+  const userId = await getUserId();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  await getOrCreateBusinessId(userId);
 
   const { data: business } = await supabase
     .from("businesses")

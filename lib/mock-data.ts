@@ -27,6 +27,9 @@ export interface Contact {
   createdAt: string;
 }
 
+// Meta Template Management status lifecycle (see migration 005_template_status.sql).
+export type TemplateStatus = "local" | "pending" | "approved" | "rejected" | "paused" | "disabled";
+
 export interface Template {
   id: string;
   name: string;
@@ -34,6 +37,10 @@ export interface Template {
   variables: string[];
   imageUrls?: string[];
   createdAt: string;
+  // FEATURE: Meta Template Management fields (optional so mock data still type-checks).
+  status?: TemplateStatus;
+  rejection_reason?: string;
+  meta_template_name?: string;
 }
 
 export const mockCampaigns: Campaign[] = [

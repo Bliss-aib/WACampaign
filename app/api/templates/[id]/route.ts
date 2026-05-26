@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/db/client";
+import { getUserId, getOrCreateBusinessId } from "@/lib/auth";
 
 async function getBusinessId(userId: string) {
   const { data } = await supabase.from("businesses").select("id").eq("user_id", userId).single();
@@ -7,7 +8,9 @@ async function getBusinessId(userId: string) {
 }
 
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const userId = "dev-user";
+  const userId = await getUserId();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  await getOrCreateBusinessId(userId);
 
   const businessId = await getBusinessId(userId);
   if (!businessId) return NextResponse.json({ error: "Business not found" }, { status: 404 });
@@ -15,9 +18,22 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
   const { id } = await params;
   const { name, body, variables, imageUrls } = await req.json();
 
+  // FEATURE: Editing a template's content invalidates any prior Meta approval —
+  // Meta versions templates, so a changed body must be re-submitted. Reset the
+  // status to 'local' and clear the old Meta linkage so the UI prompts a resubmit.
   const { data, error } = await supabase
     .from("templates")
-    .update({ name, body, variables: variables || [], image_urls: imageUrls || null })
+    .update({
+      name,
+      body,
+      variables: variables || [],
+      image_urls: imageUrls || null,
+      status: "local",
+      meta_template_id: null,
+      meta_template_name: null,
+      rejection_reason: null,
+      submitted_at: null,
+    })
     .eq("id", id)
     .eq("business_id", businessId)
     .select()
@@ -28,7 +44,9 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 }
 
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const userId = "dev-user";
+  const userId = await getUserId();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  await getOrCreateBusinessId(userId);
 
   const businessId = await getBusinessId(userId);
   if (!businessId) return NextResponse.json({ error: "Business not found" }, { status: 404 });

@@ -1,18 +1,37 @@
-import { Template } from "@/lib/mock-data";
+import { Template, TemplateStatus } from "@/lib/mock-data";
 import Image from "next/image";
-import { Pencil, Trash2 } from "lucide-react";
+import { Pencil, Trash2, Send } from "lucide-react";
+
+// FEATURE: Meta Template Management — visual config for each approval status.
+const STATUS_CONFIG: Record<TemplateStatus, { label: string; className: string }> = {
+  local:    { label: "Not submitted", className: "bg-zinc-100 text-zinc-600" },
+  pending:  { label: "Pending review", className: "bg-amber-100 text-amber-700" },
+  approved: { label: "Approved", className: "bg-emerald-100 text-emerald-700" },
+  rejected: { label: "Rejected", className: "bg-red-100 text-red-700" },
+  paused:   { label: "Paused", className: "bg-orange-100 text-orange-700" },
+  disabled: { label: "Disabled", className: "bg-zinc-200 text-zinc-700" },
+};
 
 export function TemplateCard({
   template,
   onDelete,
   onEdit,
+  onSubmit,
 }: {
   template: Template;
   onDelete: (id: string) => void;
   onEdit: (template: Template) => void;
+  // FEATURE: submit a local/rejected template to Meta for approval.
+  onSubmit: (id: string) => void;
 }) {
   const images = template.imageUrls || [];
   const hasImages = images.length > 0;
+
+  // Default to "local" when the field is absent (e.g. mock data).
+  const status: TemplateStatus = template.status || "local";
+  const statusCfg = STATUS_CONFIG[status];
+  // A template can be (re)submitted to Meta when it hasn't been approved yet.
+  const canSubmit = status === "local" || status === "rejected";
 
   return (
     <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white">
@@ -51,8 +70,24 @@ export function TemplateCard({
       )}
       <div className="p-4">
         <div className="flex items-start justify-between gap-2">
-          <p className="text-sm font-medium text-black line-clamp-1">{template.name}</p>
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-black line-clamp-1">{template.name}</p>
+            {/* FEATURE: Meta approval status badge */}
+            <span className={`mt-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${statusCfg.className}`}>
+              {statusCfg.label}
+            </span>
+          </div>
           <div className="flex items-center gap-1 shrink-0">
+            {/* FEATURE: submit to Meta when not yet approved */}
+            {canSubmit && (
+              <button
+                onClick={() => onSubmit(template.id)}
+                className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-emerald-600 transition-colors"
+                title="Submit to Meta for approval"
+              >
+                <Send className="h-3.5 w-3.5" />
+              </button>
+            )}
             <button
               onClick={() => onEdit(template)}
               className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-black transition-colors"
@@ -87,6 +122,12 @@ export function TemplateCard({
             </span>
           ))}
         </div>
+        {/* FEATURE: show Meta's rejection reason so the user knows what to fix */}
+        {status === "rejected" && template.rejection_reason && (
+          <p className="mt-3 rounded bg-red-50 px-2 py-1.5 text-[11px] text-red-700">
+            <span className="font-medium">Rejected:</span> {template.rejection_reason}
+          </p>
+        )}
       </div>
     </div>
   );

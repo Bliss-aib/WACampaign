@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/db/client";
+import { getUserId, getOrCreateBusinessId } from "@/lib/auth";
 import { removeCampaignJob } from "@/lib/queue";
 
 async function getBusinessId(userId: string) {
@@ -8,7 +9,9 @@ async function getBusinessId(userId: string) {
 }
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const userId = "dev-user";
+  const userId = await getUserId();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  await getOrCreateBusinessId(userId);
 
   const businessId = await getBusinessId(userId);
   if (!businessId) return NextResponse.json({ error: "Business not found" }, { status: 404 });
@@ -31,7 +34,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 }
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const userId = "dev-user";
+  const userId = await getUserId();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  await getOrCreateBusinessId(userId);
 
   const businessId = await getBusinessId(userId);
   if (!businessId) return NextResponse.json({ error: "Business not found" }, { status: 404 });
@@ -65,7 +70,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 }
 
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const userId = "dev-user";
+  const userId = await getUserId();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  await getOrCreateBusinessId(userId);
 
   const businessId = await getBusinessId(userId);
   if (!businessId) return NextResponse.json({ error: "Business not found" }, { status: 404 });

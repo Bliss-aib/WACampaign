@@ -1,12 +1,21 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/db/client";
+import { getUserId, getOrCreateBusinessId } from "@/lib/auth";
 
 // NOTE: This requires a "messages" table in Supabase with columns:
 // id, business_id, contact_phone, contact_name, text, sender ("me" | "them"), created_at
 // If the table doesn't exist yet, it gracefully falls back to mock data.
 
+// Format a timestamp into a short "10:30 AM"-style label for the chat UI.
+function fmtTime(ts: string | null): string {
+  if (!ts) return "";
+  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
 export async function GET() {
-  const userId = "dev-user";
+  const userId = await getUserId();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  await getOrCreateBusinessId(userId);
 
   const { data: business } = await supabase
     .from("businesses")
@@ -16,46 +25,87 @@ export async function GET() {
 
   const isConnected = business?.connection_status === "connected";
 
-  // Try to fetch real messages from DB
+  // Build conversations keyed by contact phone, merging two sources:
+  //   1. Outbound campaign messages we SENT (campaign_contacts) — gives us the
+  //      list of contacts that received a message plus its delivery/read status.
+  //   2. Inbound replies (messages table) — gives us what contacts wrote back.
   try {
-    const { data: messages } = await supabase
+    const conversations: Record<string, any> = {};
+    const ensure = (phone: string, name?: string) => {
+      if (!conversations[phone]) {
+        conversations[phone] = {
+          id: phone,
+          name: name || phone,
+          phone,
+          lastMessage: "",
+          lastTime: "",
+          unread: 0,
+          messages: [] as any[],
+        };
+      } else if (name && conversations[phone].name === phone) {
+        conversations[phone].name = name; // upgrade phone -> real name when known
+      }
+      return conversations[phone];
+    };
+
+    // ── 1. Outbound: campaign messages that actually went out ──
+    // status beyond 'pending' means it was sent (sent/delivered/read) or failed.
+    const { data: sentRows } = await supabase
+      .from("campaign_contacts")
+      .select("id, status, sent_at, created_at, contacts(name, phone_number), campaigns!inner(business_id, templates(body))")
+      .eq("campaigns.business_id", business?.id)
+      .in("status", ["sent", "delivered", "read", "failed"]);
+
+    for (const row of (sentRows as any[]) || []) {
+      const contact = row.contacts;
+      if (!contact?.phone_number) continue;
+      const conv = ensure(contact.phone_number, contact.name);
+      const ts = row.sent_at || row.created_at;
+      conv.messages.push({
+        id: `cc-${row.id}`,
+        text: row.campaigns?.templates?.body || "Campaign message",
+        sender: "me",
+        status: row.status, // 'sent' | 'delivered' | 'read' | 'failed'
+        time: fmtTime(ts),
+        _ts: ts,
+      });
+    }
+
+    // ── 2. Inbound: replies from contacts ──
+    const { data: replies } = await supabase
       .from("messages")
       .select("*")
       .eq("business_id", business?.id)
       .order("created_at", { ascending: true });
 
-    if (messages && messages.length > 0) {
-      // Group by contact
-      const conversations: Record<string, any> = {};
-      for (const m of messages) {
-        const key = m.contact_phone;
-        if (!conversations[key]) {
-          conversations[key] = {
-            id: key,
-            name: m.contact_name || key,
-            phone: key,
-            lastMessage: m.text,
-            lastTime: new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-            unread: m.sender === "them" && !m.read ? 1 : 0,
-            messages: [],
-          };
-        }
-        conversations[key].messages.push({
-          id: m.id,
-          text: m.text,
-          sender: m.sender,
-          time: new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-        });
-        conversations[key].lastMessage = m.text;
-      }
-
-      return NextResponse.json({
-        connected: isConnected,
-        conversations: Object.values(conversations),
+    for (const m of (replies as any[]) || []) {
+      const conv = ensure(m.contact_phone, m.contact_name);
+      conv.messages.push({
+        id: m.id,
+        text: m.text,
+        sender: m.sender, // 'them' (or 'me' if outbound ever stored here)
+        time: fmtTime(m.created_at),
+        _ts: m.created_at,
+        read: m.read,
       });
+      if (m.sender === "them" && !m.read) conv.unread += 1;
     }
+
+    const list = Object.values(conversations);
+    if (list.length > 0) {
+      for (const conv of list as any[]) {
+        // Order each thread chronologically, then derive the preview fields.
+        conv.messages.sort((a: any, b: any) => new Date(a._ts).getTime() - new Date(b._ts).getTime());
+        const last = conv.messages[conv.messages.length - 1];
+        conv.lastMessage = last?.text || "";
+        conv.lastTime = last?.time || "";
+        conv.messages.forEach((msg: any) => delete msg._ts); // drop internal sort key
+      }
+      return NextResponse.json({ connected: isConnected, conversations: list });
+    }
+    // No real data yet — fall through to demo data below.
   } catch {
-    // Table likely doesn't exist yet — fall through to mock data
+    // Tables may be missing in a fresh setup — fall through to mock data.
   }
 
   // Fallback mock data for demo

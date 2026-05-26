@@ -21,6 +21,8 @@ export default function NewCampaignPage() {
   const [schedule, setSchedule] = useState<string>("");
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // FEATURE (Option A): values for the selected template's non-name variables.
+  const [variableValues, setVariableValues] = useState<Record<string, string>>({});
 
   useEffect(() => {
     Promise.all([fetch("/api/templates"), fetch("/api/contacts")])
@@ -36,7 +38,17 @@ export default function NewCampaignPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  const selectedTemplateObj = templates.find((t) => t.id === selectedTemplate);
+  // FEATURE: Only APPROVED templates can be used in a campaign — Meta rejects
+  // sends for templates that aren't approved. We hide the rest and explain why.
+  const approvedTemplates = templates.filter((t) => (t.status || "approved") === "approved");
+  const hiddenCount = templates.length - approvedTemplates.length;
+
+  const selectedTemplateObj = approvedTemplates.find((t) => t.id === selectedTemplate);
+
+  // FEATURE (Option A): the non-name variables that need a campaign-level value.
+  // {{name}} is filled per-contact, so it's excluded here.
+  const fillableVars: string[] = (selectedTemplateObj?.variables || []).filter((v: string) => v !== "name");
+  const allVarsFilled = fillableVars.every((v) => (variableValues[v] || "").trim().length > 0);
 
   const handleSubmit = async () => {
     setSubmitting(true);
@@ -48,6 +60,7 @@ export default function NewCampaignPage() {
         templateId: selectedTemplate,
         contactIds: selectedContacts,
         scheduledAt: schedule || null,
+        variableValues, // FEATURE (Option A)
       }),
     });
     if (res.ok) {
@@ -59,7 +72,12 @@ export default function NewCampaignPage() {
   };
 
   const canSubmit =
-    name.trim() && selectedTemplate && selectedContacts.length > 0 && schedule && !submitting;
+    name.trim() &&
+    selectedTemplate &&
+    selectedContacts.length > 0 &&
+    schedule &&
+    allVarsFilled && // FEATURE (Option A): all non-name variables must have a value
+    !submitting;
 
   if (loading) {
     return (
@@ -102,10 +120,44 @@ export default function NewCampaignPage() {
       <div className="space-y-3">
         <h3 className="text-sm font-medium text-black">1. Select Template</h3>
         <TemplateSelector
-          templates={templates}
+          templates={approvedTemplates}
           selectedId={selectedTemplate}
           onSelect={setSelectedTemplate}
         />
+        {/* FEATURE: explain why some templates aren't selectable */}
+        {hiddenCount > 0 && (
+          <p className="text-xs text-zinc-500">
+            {hiddenCount} template{hiddenCount > 1 ? "s are" : " is"} hidden because{" "}
+            {hiddenCount > 1 ? "they are" : "it is"} not yet approved by Meta. Submit and get
+            approval on the Templates page first.
+          </p>
+        )}
+
+        {/* FEATURE (Option A): collect values for the selected template's non-name
+            variables. These apply to every recipient. {{name}} is filled per-contact. */}
+        {fillableVars.length > 0 && (
+          <div className="mt-2 space-y-3 rounded-lg border border-zinc-200 bg-zinc-50 p-4">
+            <p className="text-sm font-medium text-black">Fill in template variables</p>
+            <p className="text-xs text-zinc-500">
+              These values are sent to every recipient. <code className="rounded bg-zinc-200 px-1">{"{{name}}"}</code> is
+              automatically filled from each contact.
+            </p>
+            {fillableVars.map((v) => (
+              <div key={v} className="space-y-1">
+                <label className="block text-xs font-medium text-zinc-600">
+                  {"{{"}{v}{"}}"}
+                </label>
+                <input
+                  type="text"
+                  value={variableValues[v] || ""}
+                  onChange={(e) => setVariableValues((prev) => ({ ...prev, [v]: e.target.value }))}
+                  placeholder={`Value for ${v}`}
+                  className="w-full rounded-md border border-zinc-200 px-3 py-2 text-sm text-black placeholder:text-zinc-400 focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
+                />
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <Separator className="bg-zinc-100" />
