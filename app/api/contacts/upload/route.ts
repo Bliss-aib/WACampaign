@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/db/client";
+import { getUserId, getOrCreateBusinessId } from "@/lib/auth";
 import Papa from "papaparse";
 
 async function getBusinessId(userId: string) {
@@ -8,7 +9,9 @@ async function getBusinessId(userId: string) {
 }
 
 export async function POST(req: Request) {
-  const userId = "dev-user";
+  const userId = await getUserId();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  await getOrCreateBusinessId(userId);
 
   const businessId = await getBusinessId(userId);
   if (!businessId) return NextResponse.json({ error: "Business not found" }, { status: 404 });

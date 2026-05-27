@@ -1,5 +1,13 @@
 import { decrypt } from "./encrypt";
 
+// FIX #7: Number of total attempts (1 initial + retries) for transient failures.
+const MAX_ATTEMPTS = 3;
+
+// Small helper to pause between retries.
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function sendWhatsAppMessage(
   accessToken: string,
   phoneNumberId: string,
@@ -33,15 +41,188 @@ export async function sendWhatsAppMessage(
     ];
   }
 
+  // FIX #7: Retry on transient failures instead of giving up after one try.
+  // A momentary Meta hiccup (HTTP 429 rate-limit or any 5xx server error) used
+  // to permanently fail that one message, so a random subset of recipients
+  // silently missed the campaign. We now retry up to MAX_ATTEMPTS times with
+  // exponential backoff (1s, 3s, ...), honoring Meta's Retry-After header when
+  // present. Non-transient errors (e.g. 4xx like an invalid number or template)
+  // are returned immediately — retrying those would never help.
+  let lastData: any = null;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    const data = await res.json();
+    lastData = data;
+
+    // Success — return right away.
+    if (res.ok) {
+      return { ok: true, data };
+    }
+
+    const isTransient = res.status === 429 || res.status >= 500;
+    const isLastAttempt = attempt === MAX_ATTEMPTS;
+
+    // Permanent error, or we've exhausted our attempts — stop and report.
+    if (!isTransient || isLastAttempt) {
+      return { ok: false, data };
+    }
+
+    // Transient error with attempts remaining — wait, then retry.
+    // Prefer the server-provided Retry-After (seconds); otherwise back off
+    // exponentially: 1s after attempt 1, 3s after attempt 2, ...
+    const retryAfterHeader = res.headers.get("retry-after");
+    const backoffMs = retryAfterHeader
+      ? Number(retryAfterHeader) * 1000
+      : Math.pow(3, attempt - 1) * 1000;
+
+    console.warn(
+      `[meta] send to ${to} failed (HTTP ${res.status}), attempt ${attempt}/${MAX_ATTEMPTS}. Retrying in ${backoffMs}ms.`
+    );
+    await sleep(backoffMs);
+  }
+
+  // Should be unreachable, but return the last response defensively.
+  return { ok: false, data: lastData };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// FEATURE: Meta Template Management
+//
+// WhatsApp template messages can only send templates that are registered AND
+// approved on Meta. The helpers below submit a locally-authored template to
+// Meta for approval. The message body the user wrote is what gets submitted —
+// so once Meta approves it, campaigns finally send the user's actual content
+// instead of Meta's built-in sample.
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * Meta requires template names to be lowercase with underscores only
+ * (no spaces or capitals). e.g. "Welcome Message" -> "welcome_message".
+ */
+export function toMetaTemplateName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_") // non-alphanumerics become underscores
+    .replace(/^_+|_+$/g, "")       // trim leading/trailing underscores
+    .slice(0, 512) || "template";
+}
+
+/**
+ * Provide a plausible sample value for a variable name. Meta requires an
+ * example for every body placeholder so reviewers can see how it renders.
+ */
+function exampleForVariable(varName: string): string {
+  const v = varName.toLowerCase();
+  if (v.includes("name")) return "Alex";
+  if (v.includes("business") || v.includes("company")) return "Acme Co";
+  if (v.includes("discount") || v.includes("percent")) return "20%";
+  if (v.includes("code")) return "SAVE20";
+  if (v.includes("link") || v.includes("url")) return "https://example.com";
+  if (v.includes("date")) return "May 25";
+  return "Sample";
+}
+
+/**
+ * Convert a body written with NAMED variables ({{name}}, {{business}}) into the
+ * POSITIONAL format Meta requires ({{1}}, {{2}}). The positional index is taken
+ * from the template's declared `variables` array, so it stays consistent with
+ * the order the worker sends parameters in at send time.
+ *
+ * Returns the converted text plus the ordered example values.
+ */
+export function convertBodyToPositional(
+  body: string,
+  variables: string[]
+): { text: string; examples: string[] } {
+  let text = body;
+  variables.forEach((varName, i) => {
+    // Replace every {{varName}} (allowing inner spaces) with {{i+1}}.
+    const re = new RegExp(`\\{\\{\\s*${varName}\\s*\\}\\}`, "g");
+    text = text.replace(re, `{{${i + 1}}}`);
+  });
+  return { text, examples: variables.map(exampleForVariable) };
+}
+
+/**
+ * Submit a template to Meta for approval.
+ * POST https://graph.facebook.com/<v>/{waba_id}/message_templates
+ *
+ * Returns { ok, data } where data on success contains { id, status, category }.
+ * `status` is typically "PENDING" (sometimes "APPROVED" instantly on test WABAs).
+ */
+export async function createWhatsAppTemplate(params: {
+  accessToken: string;
+  wabaId: string;
+  name: string; // already normalized via toMetaTemplateName
+  language?: string;
+  body: string;
+  variables?: string[];
+  category?: "MARKETING" | "UTILITY" | "AUTHENTICATION";
+}) {
+  const {
+    accessToken,
+    wabaId,
+    name,
+    language = "en_US",
+    body,
+    variables = [],
+    category = "MARKETING",
+  } = params;
+
+  const { text, examples } = convertBodyToPositional(body, variables);
+
+  // The BODY component. Only attach an `example` when there are variables —
+  // Meta rejects an example block for a body with zero placeholders.
+  const bodyComponent: any = { type: "BODY", text };
+  if (variables.length > 0) {
+    bodyComponent.example = { body_text: [examples] };
+  }
+
+  const url = `https://graph.facebook.com/v18.0/${wabaId}/message_templates`;
   const res = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      name,
+      language,
+      category,
+      components: [bodyComponent],
+    }),
   });
 
+  const data = await res.json();
+  return { ok: res.ok, data };
+}
+
+/**
+ * FEATURE (Option A): Fetch all message templates and their current statuses
+ * from Meta. This is an OUTBOUND call (your server → Meta), so it works in any
+ * environment — including localhost where the inbound approval webhook can't
+ * reach you. Used to sync approval status on demand.
+ *
+ * GET https://graph.facebook.com/<v>/{waba_id}/message_templates
+ * Returns { ok, data } where data.data is an array of
+ * { name, status, category, language, id, rejected_reason }.
+ */
+export async function getWhatsAppTemplates(accessToken: string, wabaId: string) {
+  const url =
+    `https://graph.facebook.com/v18.0/${wabaId}/message_templates` +
+    `?fields=name,status,category,language,id,rejected_reason&limit=200`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
   const data = await res.json();
   return { ok: res.ok, data };
 }

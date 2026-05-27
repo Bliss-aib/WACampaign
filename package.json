@@ -10,7 +10,7 @@
     "worker": "tsx workers/campaign-worker.ts"
   },
   "dependencies": {
-    "@clerk/nextjs": "^7.3.3",
+    "@supabase/ssr": "^0.10.3",
     "@supabase/supabase-js": "^2.105.4",
     "@tanstack/react-table": "^8.21.3",
     "bullmq": "^5.76.8",

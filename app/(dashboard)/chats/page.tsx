@@ -20,6 +20,8 @@ interface ChatMessage {
   text: string;
   sender: "me" | "them";
   time: string;
+  // Delivery state for outbound messages: 'sent' | 'delivered' | 'read' | 'failed'.
+  status?: string;
 }
 
 interface ChatContact {
@@ -32,75 +34,12 @@ interface ChatContact {
   messages: ChatMessage[];
 }
 
-const MOCK_CHATS: ChatContact[] = [
-  {
-    id: "1",
-    name: "Alice Johnson",
-    phone: "+1 415-555-1234",
-    lastMessage: "Thanks for the discount code!",
-    lastTime: "10:30 AM",
-    unread: 2,
-    messages: [
-      { id: "m1", text: "Hi Alice, check out our summer sale! Get 20% off with code SAVE20.", sender: "me", time: "10:00 AM" },
-      { id: "m2", text: "Wow, that sounds great! What items are included?", sender: "them", time: "10:15 AM" },
-      { id: "m3", text: "Almost everything in our new collection. The sale ends this Sunday.", sender: "me", time: "10:20 AM" },
-      { id: "m4", text: "Thanks for the discount code!", sender: "them", time: "10:30 AM" },
-    ],
-  },
-  {
-    id: "2",
-    name: "Bob Smith",
-    phone: "+1 415-555-5678",
-    lastMessage: "When will my order arrive?",
-    lastTime: "Yesterday",
-    unread: 0,
-    messages: [
-      { id: "m1", text: "Hello Bob, your order #12345 has been shipped.", sender: "me", time: "Yesterday" },
-      { id: "m2", text: "When will my order arrive?", sender: "them", time: "Yesterday" },
-    ],
-  },
-  {
-    id: "3",
-    name: "Charlie Brown",
-    phone: "+1 415-555-9012",
-    lastMessage: "I booked the appointment for Friday.",
-    lastTime: "Tue",
-    unread: 1,
-    messages: [
-      { id: "m1", text: "Hi Charlie, would you like to schedule a call this week?", sender: "me", time: "Tue" },
-      { id: "m2", text: "I booked the appointment for Friday.", sender: "them", time: "Tue" },
-    ],
-  },
-  {
-    id: "4",
-    name: "Diana Prince",
-    phone: "+1 415-555-3456",
-    lastMessage: "The event looks amazing, count me in!",
-    lastTime: "Mon",
-    unread: 0,
-    messages: [
-      { id: "m1", text: "You're invited to our Grand Opening on May 25th!", sender: "me", time: "Mon" },
-      { id: "m2", text: "The event looks amazing, count me in!", sender: "them", time: "Mon" },
-    ],
-  },
-  {
-    id: "5",
-    name: "Evan Wright",
-    phone: "+1 415-555-7890",
-    lastMessage: "Can you send me the new catalog?",
-    lastTime: "Sun",
-    unread: 0,
-    messages: [
-      { id: "m1", text: "Hey Evan, our new collection just dropped.", sender: "me", time: "Sun" },
-      { id: "m2", text: "Can you send me the new catalog?", sender: "them", time: "Sun" },
-    ],
-  },
-];
-
 export default function ChatsPage() {
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [selectedId, setSelectedId] = useState<string>(MOCK_CHATS[0].id);
+  // Real conversations loaded from /api/messages (replaces the old mock list).
+  const [chats, setChats] = useState<ChatContact[]>([]);
+  const [selectedId, setSelectedId] = useState<string>("");
   const [search, setSearch] = useState("");
   const [reply, setReply] = useState("");
   const [showBanner, setShowBanner] = useState(true);
@@ -111,6 +50,9 @@ export default function ChatsPage() {
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((d) => {
         setConnected(d.connected);
+        const list: ChatContact[] = d.conversations || [];
+        setChats(list);
+        if (list.length > 0) setSelectedId(list[0].id);
       })
       .catch(() => {
         setConnected(false);
@@ -118,9 +60,9 @@ export default function ChatsPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  const selectedChat = MOCK_CHATS.find((c) => c.id === selectedId) || MOCK_CHATS[0];
+  const selectedChat = chats.find((c) => c.id === selectedId);
 
-  const filtered = MOCK_CHATS.filter((c) => {
+  const filtered = chats.filter((c) => {
     const matchesSearch =
       c.name.toLowerCase().includes(search.toLowerCase()) ||
       c.phone.includes(search) ||
@@ -239,6 +181,14 @@ export default function ChatsPage() {
 
         {/* Right: Chat thread */}
         <Card className="flex flex-1 flex-col border-zinc-200">
+          {!selectedChat ? (
+            <div className="flex flex-1 items-center justify-center">
+              <p className="text-sm text-zinc-400">
+                {chats.length === 0 ? "No conversations yet" : "Select a conversation"}
+              </p>
+            </div>
+          ) : (
+          <>
           {/* Header */}
           <div className="flex items-center justify-between border-b border-zinc-100 px-5 py-3">
             <div className="flex items-center gap-3">
@@ -272,7 +222,19 @@ export default function ChatsPage() {
                   }`}
                 >
                   <p className="text-sm leading-relaxed">{msg.text}</p>
-                  <p className="mt-1 text-right text-[10px] text-zinc-400">{msg.time}</p>
+                  <p className="mt-1 text-right text-[10px] text-zinc-400">
+                    {msg.time}
+                    {/* Read/delivery status for outbound messages */}
+                    {msg.sender === "me" && msg.status && (
+                      <span className={msg.status === "read" ? "ml-1 text-sky-400" : "ml-1"}>
+                        {msg.status === "failed"
+                          ? "failed"
+                          : msg.status === "sent"
+                          ? "✓"
+                          : "✓✓"}
+                      </span>
+                    )}
+                  </p>
                 </div>
               </div>
             ))}
@@ -302,6 +264,8 @@ export default function ChatsPage() {
               </button>
             </div>
           </div>
+          </>
+          )}
         </Card>
       </div>
     </div>

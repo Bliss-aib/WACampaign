@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/db/client";
+import { getUserId, getOrCreateBusinessId } from "@/lib/auth";
 import { scheduleCampaign, removeCampaignJob } from "@/lib/queue";
 
 export async function GET(req: Request) {
-  const userId = "dev-user";
+  const userId = await getUserId();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  await getOrCreateBusinessId(userId);
 
   const { searchParams } = new URL(req.url);
   const status = searchParams.get("status");
@@ -39,9 +42,13 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const userId = "dev-user";
+  const userId = await getUserId();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  await getOrCreateBusinessId(userId);
 
-  const { name, templateId, contactIds, scheduledAt } = await req.json();
+  // FEATURE (Option A): variableValues holds the values for non-name template
+  // variables (e.g. { business, discount, code, link }), applied to every recipient.
+  const { name, templateId, contactIds, scheduledAt, variableValues } = await req.json();
 
   const { data: business } = await supabase
     .from("businesses")
@@ -61,6 +68,7 @@ export async function POST(req: Request) {
       status: scheduledAt ? "scheduled" : "draft",
       scheduled_at: scheduledAt || null,
       total_contacts: contactIds.length,
+      variable_values: variableValues || {}, // FEATURE (Option A)
     })
     .select()
     .single();
