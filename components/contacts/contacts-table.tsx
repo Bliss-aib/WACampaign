@@ -44,7 +44,11 @@ export function ContactsTable({
               <TableCell className="text-sm font-medium text-black">{contact.name}</TableCell>
               <TableCell className="text-sm text-zinc-600">{contact.phoneNumber}</TableCell>
               <TableCell className="text-sm text-zinc-400">
-                {new Date(contact.createdAt).toLocaleDateString()}
+                {/* FIX: guard against a missing/invalid date so it never renders
+                    "Invalid Date" — show an em dash instead. */}
+                {contact.createdAt && !isNaN(new Date(contact.createdAt).getTime())
+                  ? new Date(contact.createdAt).toLocaleDateString()
+                  : "—"}
               </TableCell>
               <TableCell>
                 <Button

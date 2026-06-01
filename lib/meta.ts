@@ -94,6 +94,43 @@ export async function sendWhatsAppMessage(
   return { ok: false, data: lastData };
 }
 
+/**
+ * FEATURE (Chats reply): Send a FREE-FORM text message (not a template).
+ *
+ * WhatsApp only permits free-form messages inside the 24-hour customer service
+ * window — i.e. within 24h of the contact's last inbound message. Outside that
+ * window Meta rejects with error 131047 ("re-engagement message") and a template
+ * must be used instead. We surface Meta's error verbatim so the UI can explain.
+ */
+export async function sendWhatsAppText(
+  accessToken: string,
+  phoneNumberId: string,
+  to: string,
+  text: string
+) {
+  const url = `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`;
+  // Meta wants digits only (no leading "+", spaces, or dashes).
+  const recipient = to.replace(/[^0-9]/g, "");
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: recipient,
+      type: "text",
+      text: { body: text },
+    }),
+  });
+
+  const data = await res.json();
+  return { ok: res.ok, data };
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // FEATURE: Meta Template Management
 //

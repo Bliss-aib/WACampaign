@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Search, Send, MoreVertical, MessageCircle, Link2, X, Filter } from "lucide-react";
+import { toast } from "sonner";
 import {
   Select,
   SelectContent,
@@ -42,6 +43,7 @@ export default function ChatsPage() {
   const [selectedId, setSelectedId] = useState<string>("");
   const [search, setSearch] = useState("");
   const [reply, setReply] = useState("");
+  const [sending, setSending] = useState(false);
   const [showBanner, setShowBanner] = useState(true);
   const [statusFilter, setStatusFilter] = useState<"all" | "unread" | "read">("all");
 
@@ -61,6 +63,46 @@ export default function ChatsPage() {
   }, []);
 
   const selectedChat = chats.find((c) => c.id === selectedId);
+
+  // FEATURE (Chats reply): send a free-form WhatsApp text to the open contact.
+  // Only works inside WhatsApp's 24h customer-service window; Meta's error is
+  // surfaced as a toast otherwise. On success the message is appended to the thread.
+  const handleSendReply = async () => {
+    const text = reply.trim();
+    if (!text || !selectedChat || sending) return;
+    setSending(true);
+    try {
+      const res = await fetch("/api/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to: selectedChat.phone, text }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        const sent: ChatMessage = {
+          id: data.messageId || `local-${Date.now()}`,
+          text,
+          sender: "me",
+          time: now,
+          status: "sent",
+        };
+        // Append to the open conversation's thread.
+        setChats((prev) =>
+          prev.map((c) =>
+            c.id === selectedChat.id
+              ? { ...c, messages: [...c.messages, sent], lastMessage: text, lastTime: now }
+              : c
+          )
+        );
+        setReply("");
+      } else {
+        toast.error(data.error || "Failed to send message");
+      }
+    } finally {
+      setSending(false);
+    }
+  };
 
   const filtered = chats.filter((c) => {
     const matchesSearch =
@@ -247,18 +289,16 @@ export default function ChatsPage() {
                 value={reply}
                 onChange={(e) => setReply(e.target.value)}
                 placeholder="Type a message..."
+                disabled={sending}
                 className="flex-1 border-zinc-200 text-black text-sm focus-visible:ring-black"
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && reply.trim()) {
-                    setReply("");
-                  }
+                  if (e.key === "Enter") handleSendReply();
                 }}
               />
               <button
-                onClick={() => {
-                  if (reply.trim()) setReply("");
-                }}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-black text-white hover:bg-zinc-800 transition-colors"
+                onClick={handleSendReply}
+                disabled={sending || !reply.trim()}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-black text-white hover:bg-zinc-800 transition-colors disabled:opacity-50"
               >
                 <Send className="h-4 w-4" />
               </button>

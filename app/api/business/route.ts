@@ -28,17 +28,25 @@ export async function POST(req: Request) {
 
   const encryptedToken = encrypt(access_token);
 
+  // FIX: getOrCreateBusinessId (above) guarantees a row already exists for this
+  // user_id. Without an explicit onConflict target, upsert defaults to the
+  // primary key (id) — it generates a NEW id, attempts an INSERT, and collides
+  // with the user_id UNIQUE constraint → 500. Conflict-resolve on user_id so the
+  // existing row is UPDATED instead.
   const { data, error } = await supabase
     .from("businesses")
-    .upsert({
-      user_id: userId,
-      name: name || "My Business",
-      access_token: encryptedToken,
-      waba_id,
-      phone_number_id,
-      connection_status: "connected",
-      updated_at: new Date().toISOString(),
-    } as any)
+    .upsert(
+      {
+        user_id: userId,
+        name: name || "My Business",
+        access_token: encryptedToken,
+        waba_id,
+        phone_number_id,
+        connection_status: "connected",
+        updated_at: new Date().toISOString(),
+      } as any,
+      { onConflict: "user_id" }
+    )
     .select()
     .single();
 
