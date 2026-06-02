@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { WhatsAppConnectionCard } from "@/components/settings/whatsapp-connection";
 import { PlanInfoCard } from "@/components/settings/plan-info";
 import { ProfileCard } from "@/components/settings/profile-card";
+import { DangerZone } from "@/components/settings/danger-zone";
 import { Skeleton } from "@/components/ui/skeleton";
 import { mockBusiness } from "@/lib/mock-data";
 
@@ -89,6 +90,7 @@ export default function SettingsPage() {
         <PlanInfoCard dailyLimit={usage?.limit || 250} todayUsage={usage?.used || 0} />
       </div>
       <ProfileCard />
+      <DangerZone />
     </div>
   );
 }

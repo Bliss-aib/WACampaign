@@ -263,3 +263,26 @@ export async function getWhatsAppTemplates(accessToken: string, wabaId: string) 
   const data = await res.json();
   return { ok: res.ok, data };
 }
+
+/**
+ * FEATURE (Delete account): Delete a message template from Meta by name.
+ *
+ * DELETE https://graph.facebook.com/<v>/{waba_id}/message_templates?name={name}
+ * Removes ALL language versions of the named template. Best-effort — used when
+ * a user deletes their account so their templates don't linger on the WABA.
+ */
+export async function deleteWhatsAppTemplate(
+  accessToken: string,
+  wabaId: string,
+  name: string
+) {
+  const url =
+    `https://graph.facebook.com/v18.0/${wabaId}/message_templates` +
+    `?name=${encodeURIComponent(name)}`;
+  const res = await fetch(url, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const data = await res.json();
+  return { ok: res.ok, data };
+}
