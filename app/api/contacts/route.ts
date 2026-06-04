@@ -31,7 +31,18 @@ export async function GET(req: Request) {
   const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  return NextResponse.json({ contacts: data || [] });
+  // FIX: the DB returns snake_case columns (phone_number, created_at) but the UI
+  // (ContactsTable, the Contact type, search filter, optimistic-add) all expect
+  // camelCase. Without mapping, the phone column renders empty and the date shows
+  // "Invalid Date" (new Date(undefined)). Normalize to camelCase here.
+  const contacts = (data || []).map((c: any) => ({
+    id: c.id,
+    name: c.name,
+    phoneNumber: c.phone_number,
+    createdAt: c.created_at,
+  }));
+
+  return NextResponse.json({ contacts });
 }
 
 export async function POST(req: Request) {

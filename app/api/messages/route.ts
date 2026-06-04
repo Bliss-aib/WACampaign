@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/db/client";
 import { getUserId, getOrCreateBusinessId } from "@/lib/auth";
+import { decrypt } from "@/lib/encrypt";
+import { sendWhatsAppText } from "@/lib/meta";
 
 // NOTE: This requires a "messages" table in Supabase with columns:
 // id, business_id, contact_phone, contact_name, text, sender ("me" | "them"), created_at
@@ -178,4 +180,63 @@ export async function GET() {
     connected: isConnected,
     conversations: mockConversations,
   });
+}
+
+// FEATURE (Chats reply): Send a free-form WhatsApp text to a contact and store
+// it as an outbound ('me') message so it appears in the thread.
+//
+// WhatsApp only allows free-form text inside the 24-hour customer service window
+// (within 24h of the contact's last inbound message). Outside it, Meta rejects
+// the send — we forward that error to the UI rather than pretending it sent.
+export async function POST(req: Request) {
+  const userId = await getUserId();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  await getOrCreateBusinessId(userId);
+
+  const { to, text } = await req.json();
+  if (!to || !text?.trim()) {
+    return NextResponse.json({ error: "Recipient and message text are required." }, { status: 400 });
+  }
+
+  // Load the business's WhatsApp credentials.
+  const { data: business } = await supabase
+    .from("businesses")
+    .select("id, access_token, phone_number_id, connection_status")
+    .eq("user_id", userId)
+    .single();
+
+  if (!business || business.connection_status !== "connected" || !business.access_token || !business.phone_number_id) {
+    return NextResponse.json(
+      { error: "WhatsApp is not connected. Connect it in Settings first." },
+      { status: 400 }
+    );
+  }
+
+  // Send via Meta (free-form text).
+  const token = decrypt(business.access_token);
+  const result = await sendWhatsAppText(token, business.phone_number_id, to, text.trim());
+
+  if (!result.ok) {
+    // Surface Meta's reason (e.g. 24h-window / re-engagement error) to the UI.
+    const reason =
+      result.data?.error?.error_data?.details ||
+      result.data?.error?.message ||
+      "Failed to send message.";
+    return NextResponse.json({ error: reason }, { status: 400 });
+  }
+
+  // Persist the outbound message so it shows in the thread (sender 'me', read).
+  const { error: insertError } = await supabase.from("messages").insert({
+    business_id: business.id,
+    contact_phone: to,
+    text: text.trim(),
+    sender: "me",
+    read: true,
+    created_at: new Date().toISOString(),
+  });
+  if (insertError) {
+    console.error("Sent to Meta but failed to store message:", insertError.message);
+  }
+
+  return NextResponse.json({ success: true, messageId: result.data?.messages?.[0]?.id });
 }
