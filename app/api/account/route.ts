@@ -6,7 +6,7 @@
 //   2. Delete the business row → ON DELETE CASCADE removes templates, contacts,
 //      campaigns, campaign_contacts, daily_usage, and messages. This also
 //      destroys our stored (encrypted) Meta access token.
-//   3. Best-effort: delete the Supabase auth user so the login is gone too.
+//   3. Best-effort: delete the Clerk user so the login is gone too.
 //
 // Note on "revoking the Meta API token": the token types used here (sample-app
 // temporary tokens / system-user tokens) cannot be reliably revoked via the
@@ -15,6 +15,7 @@
 // (System Users → revoke/regenerate). We surface this in the response.
 
 import { NextResponse } from "next/server";
+import { clerkClient } from "@clerk/nextjs/server";
 import { supabase } from "@/lib/db/client";
 import { getUserId, isAuthEnabled } from "@/lib/auth";
 import { decrypt } from "@/lib/encrypt";
@@ -81,12 +82,11 @@ export async function DELETE() {
     }
   }
 
-  // 3. Best-effort: delete the Supabase auth user (only when real auth is on and
-  //    the id is a genuine auth UUID, not the legacy "dev-user").
+  // 3. Best-effort: delete the Clerk user (only when real auth is on and
+  //    the id is a genuine Clerk user id, not the legacy "dev-user").
   if (isAuthEnabled() && userId !== "dev-user") {
     try {
-      const { error: authErr } = await (supabase as any).auth.admin.deleteUser(userId);
-      if (authErr) metaErrors.push(`Auth user deletion: ${authErr.message}`);
+      await clerkClient.users.deleteUser(userId);
     } catch (e: any) {
       metaErrors.push(`Auth user deletion: ${e?.message || "failed"}`);
     }

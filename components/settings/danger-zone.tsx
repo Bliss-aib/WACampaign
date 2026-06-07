@@ -7,15 +7,16 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useClerk } from "@clerk/nextjs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { AlertTriangle, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { createSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 export function DangerZone() {
   const router = useRouter();
+  const { signOut } = useClerk();
   const [confirming, setConfirming] = useState(false);
   const [confirmText, setConfirmText] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -32,9 +33,9 @@ export function DangerZone() {
         return;
       }
       toast.success("Account deleted");
-      // Sign out (clears the Supabase session) then return to sign-in.
+      // Sign out (clears the Clerk session) then return to sign-in.
       try {
-        await createSupabaseBrowserClient().auth.signOut();
+        await signOut();
       } catch {
         /* ignore — account is already deleted server-side */
       }

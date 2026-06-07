@@ -3,14 +3,14 @@
 // AUTH_ENABLED gate:
 //   - false (default): the app behaves exactly as before authentication existed —
 //     every request acts as the legacy "dev-user". This keeps local testing working
-//     while Google credentials are not yet configured.
-//   - true: the real signed-in Google user is used; unauthenticated requests get null.
+//     while auth is not yet configured.
+//   - true: the real signed-in Clerk user is used; unauthenticated requests get null.
 //
 // This single switch lets us ship all the auth code without breaking the running app,
-// then flip it on once Google OAuth is configured.
+// then flip it on once Clerk is configured.
 
+import { auth as clerkAuth } from "@clerk/nextjs/server";
 import { supabase } from "./db/client";
-import { createSupabaseServerClient } from "./supabase/server";
 
 const LEGACY_DEV_USER = "dev-user";
 
@@ -25,9 +25,8 @@ export function isAuthEnabled(): boolean {
 export async function getUserId(): Promise<string | null> {
   if (!isAuthEnabled()) return LEGACY_DEV_USER;
 
-  const client = await createSupabaseServerClient();
-  const { data } = await client.auth.getUser();
-  return data.user?.id ?? null;
+  const { userId } = await clerkAuth();
+  return userId ?? null;
 }
 
 /**
@@ -36,8 +35,8 @@ export async function getUserId(): Promise<string | null> {
  * First-login claim: if this user has no business yet but the legacy "dev-user"
  * business still exists (unclaimed), we reassign it to this user so the existing
  * test data (approved templates, contacts, campaigns) carries over to the first
- * real Gmail login. Subsequent users get their own fresh business — giving true
- * multi-tenant separation for testing with spare Gmail accounts.
+ * real login. Subsequent users get their own fresh business — giving true
+ * multi-tenant separation for testing with spare accounts.
  *
  * Returns null only if a brand-new business could not be created.
  */

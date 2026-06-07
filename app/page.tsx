@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { SignInButton, SignUpButton, Show, UserButton } from "@clerk/nextjs";
 import {
   MessageSquare,
   ArrowRight,
@@ -100,12 +101,24 @@ export default function HomePage() {
             >
               Pricing
             </Link>
-            <Link
-              href="/sign-in"
-              className="text-sm font-medium text-zinc-500 transition-colors hover:text-black"
-            >
-              Sign in
-            </Link>
+            <Show when="signed-out">
+              <SignInButton>
+                <button className="text-sm font-medium text-zinc-500 transition-colors hover:text-black">
+                  Sign in
+                </button>
+              </SignInButton>
+              <SignUpButton>
+                <Button
+                  size="sm"
+                  className="bg-black text-white hover:bg-zinc-800"
+                >
+                  Sign up
+                </Button>
+              </SignUpButton>
+            </Show>
+            <Show when="signed-in">
+              <UserButton />
+            </Show>
           </div>
         </div>
       </header>

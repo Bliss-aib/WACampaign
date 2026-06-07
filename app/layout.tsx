@@ -1,3 +1,4 @@
+import {ClerkProvider} from "@clerk/nextjs";
 import type { Metadata } from "next";
 import { Lora, Geist_Mono } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
@@ -30,8 +31,10 @@ export default function RootLayout({
       className={`${lora.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-white text-black">
-        {children}
-        <Toaster />
+        <ClerkProvider>
+          {children}
+          <Toaster />
+        </ClerkProvider>
       </body>
     </html>
   );
