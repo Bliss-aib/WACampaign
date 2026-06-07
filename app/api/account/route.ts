@@ -86,7 +86,8 @@ export async function DELETE() {
   //    the id is a genuine Clerk user id, not the legacy "dev-user").
   if (isAuthEnabled() && userId !== "dev-user") {
     try {
-      await clerkClient.users.deleteUser(userId);
+      const client = await clerkClient();
+      await client.users.deleteUser(userId);
     } catch (e: any) {
       metaErrors.push(`Auth user deletion: ${e?.message || "failed"}`);
     }
