@@ -18,7 +18,6 @@ export function Header({ title }: { title: string }) {
 
         <Show when="signed-in">
           <UserButton
-            afterSignOutUrl="/"
             appearance={{
               elements: {
                 userButtonAvatarBox: "h-9 w-9",
