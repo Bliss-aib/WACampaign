@@ -1,11 +1,19 @@
 import { Queue } from "bullmq";
-import { redis } from "./redis";
+import { getRedis } from "./redis";
 
-export const campaignQueue = new Queue("campaign-queue", {
-  connection: redis,
-});
+let _campaignQueue: Queue | null = null;
+
+function getCampaignQueue(): Queue {
+  if (!_campaignQueue) {
+    _campaignQueue = new Queue("campaign-queue", {
+      connection: getRedis(),
+    });
+  }
+  return _campaignQueue;
+}
 
 export async function scheduleCampaign(campaignId: string, scheduledAt: Date) {
+  const campaignQueue = getCampaignQueue();
   const delay = scheduledAt.getTime() - Date.now();
   await campaignQueue.add(
     "send-campaign",
@@ -20,6 +28,7 @@ export async function scheduleCampaign(campaignId: string, scheduledAt: Date) {
 }
 
 export async function removeCampaignJob(campaignId: string) {
+  const campaignQueue = getCampaignQueue();
   const job = await campaignQueue.getJob(campaignId);
   if (job) {
     await job.remove();

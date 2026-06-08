@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { redis } from "../lib/redis";
+import { getRedis } from "../lib/redis";
 import { supabase } from "../lib/db/client";
 import { decrypt } from "../lib/encrypt";
 import { sendWhatsAppMessage } from "../lib/meta";
@@ -183,7 +183,7 @@ const worker = new Worker(
         .eq("id", campaignId);
     }
   },
-  { connection: redis, concurrency: 1 }
+  { connection: getRedis(), concurrency: 1 }
 );
 
 worker.on("completed", (job) => {
