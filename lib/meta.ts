@@ -1,5 +1,18 @@
 import { decrypt } from "./encrypt";
 
+// FIX (L7): the Graph API version was hard-coded as "v18.0" in five places.
+// Make it configurable via META_GRAPH_VERSION so it can be bumped without code
+// edits (Meta deprecates versions on a rolling ~2-year cycle). Default keeps the
+// current behavior.
+const GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v18.0";
+const GRAPH = `https://graph.facebook.com/${GRAPH_VERSION}`;
+
+// FIX (C10): escape RegExp metacharacters so user-supplied strings can be used
+// safely inside a dynamically-built pattern.
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 // FIX #7: Number of total attempts (1 initial + retries) for transient failures.
 const MAX_ATTEMPTS = 3;
 
@@ -16,7 +29,7 @@ export async function sendWhatsAppMessage(
   languageCode: string = "en",
   bodyVariables?: Record<string, string>
 ) {
-  const url = `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`;
+  const url = `${GRAPH}/${phoneNumberId}/messages`;
 
   const body: any = {
     messaging_product: "whatsapp",
@@ -79,10 +92,16 @@ export async function sendWhatsAppMessage(
     // Transient error with attempts remaining — wait, then retry.
     // Prefer the server-provided Retry-After (seconds); otherwise back off
     // exponentially: 1s after attempt 1, 3s after attempt 2, ...
+    // FIX (H16): `Number(retryAfterHeader)` is NaN for a non-numeric header
+    // (Meta can send an HTTP-date). sleep(NaN) resolves immediately, causing a
+    // rapid-fire retry storm. Only use the header when it parses to a finite
+    // positive number; otherwise fall back to exponential backoff.
     const retryAfterHeader = res.headers.get("retry-after");
-    const backoffMs = retryAfterHeader
-      ? Number(retryAfterHeader) * 1000
-      : Math.pow(3, attempt - 1) * 1000;
+    const retryAfterSec = retryAfterHeader ? Number(retryAfterHeader) : NaN;
+    const backoffMs =
+      Number.isFinite(retryAfterSec) && retryAfterSec > 0
+        ? retryAfterSec * 1000
+        : Math.pow(3, attempt - 1) * 1000;
 
     console.warn(
       `[meta] send to ${to} failed (HTTP ${res.status}), attempt ${attempt}/${MAX_ATTEMPTS}. Retrying in ${backoffMs}ms.`
@@ -108,7 +127,7 @@ export async function sendWhatsAppText(
   to: string,
   text: string
 ) {
-  const url = `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`;
+  const url = `${GRAPH}/${phoneNumberId}/messages`;
   // Meta wants digits only (no leading "+", spaces, or dashes).
   const recipient = to.replace(/[^0-9]/g, "");
 
@@ -182,8 +201,11 @@ export function convertBodyToPositional(
 ): { text: string; examples: string[] } {
   let text = body;
   variables.forEach((varName, i) => {
-    // Replace every {{varName}} (allowing inner spaces) with {{i+1}}.
-    const re = new RegExp(`\\{\\{\\s*${varName}\\s*\\}\\}`, "g");
+    // FIX (C10): variable names are user-controlled. Interpolating them straight
+    // into a RegExp let a name like "code[" throw a SyntaxError (crash) — or
+    // worse, inject regex metacharacters. Escape the name before building the
+    // pattern so it's matched literally.
+    const re = new RegExp(`\\{\\{\\s*${escapeRegExp(varName)}\\s*\\}\\}`, "g");
     text = text.replace(re, `{{${i + 1}}}`);
   });
   return { text, examples: variables.map(exampleForVariable) };
@@ -224,7 +246,7 @@ export async function createWhatsAppTemplate(params: {
     bodyComponent.example = { body_text: [examples] };
   }
 
-  const url = `https://graph.facebook.com/v18.0/${wabaId}/message_templates`;
+  const url = `${GRAPH}/${wabaId}/message_templates`;
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -255,7 +277,7 @@ export async function createWhatsAppTemplate(params: {
  */
 export async function getWhatsAppTemplates(accessToken: string, wabaId: string) {
   const url =
-    `https://graph.facebook.com/v18.0/${wabaId}/message_templates` +
+    `${GRAPH}/${wabaId}/message_templates` +
     `?fields=name,status,category,language,id,rejected_reason&limit=200`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
@@ -277,12 +299,26 @@ export async function deleteWhatsAppTemplate(
   name: string
 ) {
   const url =
-    `https://graph.facebook.com/v18.0/${wabaId}/message_templates` +
+    `${GRAPH}/${wabaId}/message_templates` +
     `?name=${encodeURIComponent(name)}`;
   const res = await fetch(url, {
     method: "DELETE",
     headers: { Authorization: `Bearer ${accessToken}` },
   });
-  const data = await res.json();
+  // FIX (H15): a DELETE can return 204 No Content (empty body). Calling
+  // res.json() on an empty body throws a SyntaxError. Read as text first and
+  // parse only if there's something to parse.
+  const data = await safeJson(res);
   return { ok: res.ok, data };
+}
+
+/** Parse a fetch Response as JSON, tolerating empty (e.g. 204) bodies. */
+async function safeJson(res: Response): Promise<any> {
+  const raw = await res.text();
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { raw };
+  }
 }

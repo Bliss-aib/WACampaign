@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/db/client";
 import { getUserId, getOrCreateBusinessId } from "@/lib/auth";
+import { contactCreateSchema } from "@/lib/validation";
 
 async function getBusinessId(userId: string) {
   const { data } = await supabase.from("businesses").select("id").eq("user_id", userId).single();
@@ -24,8 +25,14 @@ export async function GET(req: Request) {
     .eq("business_id", businessId)
     .order("created_at", { ascending: false });
 
-  if (q) {
-    query = query.or(`name.ilike.%${q}%,phone_number.ilike.%${q}%`);
+  // FIX (C2): the raw `q` was interpolated straight into a PostgREST `.or()`
+  // filter string. PostgREST treats commas and parentheses as filter syntax, so
+  // a value like `%),name.eq.admin` could inject extra conditions and leak data.
+  // Strip the characters that carry meaning in the filter grammar (commas,
+  // parentheses, backslash) and the `%`/`*` wildcards, leaving a plain substring.
+  const safeQ = q.replace(/[,()\\%*]/g, "").trim();
+  if (safeQ) {
+    query = query.or(`name.ilike.%${safeQ}%,phone_number.ilike.%${safeQ}%`);
   }
 
   const { data, error } = await query;
@@ -53,7 +60,15 @@ export async function POST(req: Request) {
   const businessId = await getBusinessId(userId);
   if (!businessId) return NextResponse.json({ error: "Business not found" }, { status: 404 });
 
-  const { name, phone_number } = await req.json();
+  // FIX (H9): validate + normalize the body (was inserted untyped).
+  const parsed = contactCreateSchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Invalid request", details: parsed.error.flatten() },
+      { status: 400 }
+    );
+  }
+  const { name, phone_number } = parsed.data;
 
   const { data, error } = await supabase
     .from("contacts")

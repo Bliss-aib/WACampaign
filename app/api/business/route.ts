@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { supabase } from "@/lib/db/client";
 import { encrypt } from "@/lib/encrypt";
 import { getUserId, getOrCreateBusinessId } from "@/lib/auth";
+import { businessConnectSchema } from "@/lib/validation";
 
 export async function GET() {
   const userId = await getUserId();
@@ -24,7 +25,15 @@ export async function POST(req: Request) {
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   await getOrCreateBusinessId(userId);
 
-  const { access_token, waba_id, phone_number_id, name } = await req.json();
+  // FIX (H9): validate connection details before encrypting/storing.
+  const parsed = businessConnectSchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Invalid request", details: parsed.error.flatten() },
+      { status: 400 }
+    );
+  }
+  const { access_token, waba_id, phone_number_id, name } = parsed.data;
 
   const encryptedToken = encrypt(access_token);
 

@@ -3,6 +3,7 @@ import { supabase } from "@/lib/db/client";
 import { getUserId, getOrCreateBusinessId } from "@/lib/auth";
 import { decrypt } from "@/lib/encrypt";
 import { sendWhatsAppText } from "@/lib/meta";
+import { messageSendSchema } from "@/lib/validation";
 
 // NOTE: This requires a "messages" table in Supabase with columns:
 // id, business_id, contact_phone, contact_name, text, sender ("me" | "them"), created_at
@@ -193,10 +194,15 @@ export async function POST(req: Request) {
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   await getOrCreateBusinessId(userId);
 
-  const { to, text } = await req.json();
-  if (!to || !text?.trim()) {
-    return NextResponse.json({ error: "Recipient and message text are required." }, { status: 400 });
+  // FIX (H9): validate the body via schema (replaces the ad-hoc check).
+  const parsed = messageSendSchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Recipient and message text are required.", details: parsed.error.flatten() },
+      { status: 400 }
+    );
   }
+  const { to, text } = parsed.data;
 
   // Load the business's WhatsApp credentials.
   const { data: business } = await supabase

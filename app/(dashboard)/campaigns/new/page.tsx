@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { mockTemplates, mockContacts } from "@/lib/mock-data";
+import { toast } from "sonner";
 
 export default function NewCampaignPage() {
   const router = useRouter();
@@ -63,11 +64,16 @@ export default function NewCampaignPage() {
         variableValues, // FEATURE (Option A)
       }),
     });
+    // FIX (H6): the old code redirected to /campaigns on BOTH success and
+    // failure, so a failed creation silently discarded the user's work and they
+    // never saw the error. Only navigate on success; otherwise surface the error
+    // and keep the form intact so they can retry.
     if (res.ok) {
       router.push("/campaigns");
     } else {
+      const err = await res.json().catch(() => ({}));
+      toast.error(err.error || "Failed to create campaign");
       setSubmitting(false);
-      router.push("/campaigns");
     }
   };
 

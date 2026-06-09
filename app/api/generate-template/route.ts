@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+// FIX (C1): this endpoint was the only API route with NO auth gate — anyone on
+// the internet could POST and burn our Anthropic/OpenAI credits. Require a
+// signed-in user like every other route.
+import { getUserId } from "@/lib/auth";
 
 // ─────────────────────────────────────────────────────────────────────────
 // AI template generation — provider-configurable (Option B).
@@ -136,6 +140,10 @@ function generateMock(): string {
 
 export async function POST(req: Request) {
   try {
+    // FIX (C1): authentication gate — reject anonymous callers.
+    const userId = await getUserId();
+    if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
     const { prompt, imageBase64 } = await req.json();
 
     if (!prompt?.trim() && !imageBase64) {

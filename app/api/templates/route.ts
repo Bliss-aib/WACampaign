@@ -3,6 +3,7 @@ import { supabase } from "@/lib/db/client";
 import { getUserId, getOrCreateBusinessId } from "@/lib/auth";
 // FEATURE: Meta Template Management — auto-submit new templates to Meta.
 import { submitTemplate } from "@/lib/submit-template";
+import { templateCreateSchema } from "@/lib/validation";
 
 async function getBusinessId(userId: string) {
   const { data } = await supabase.from("businesses").select("id").eq("user_id", userId).single();
@@ -35,7 +36,15 @@ export async function POST(req: Request) {
   const businessId = await getBusinessId(userId);
   if (!businessId) return NextResponse.json({ error: "Business not found" }, { status: 404 });
 
-  const { name, body, variables, imageUrls } = await req.json();
+  // FIX (H9): validate the body (was destructured untyped).
+  const parsed = templateCreateSchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Invalid request", details: parsed.error.flatten() },
+      { status: 400 }
+    );
+  }
+  const { name, body, variables, imageUrls } = parsed.data;
 
   const { data, error } = await supabase
     .from("templates")

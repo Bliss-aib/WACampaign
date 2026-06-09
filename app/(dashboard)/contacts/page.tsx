@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ContactsTable } from "@/components/contacts/contacts-table";
 import { AddContactModal } from "@/components/contacts/add-contact-modal";
 import { UploadCSVModal } from "@/components/contacts/upload-csv-modal";
@@ -12,14 +12,24 @@ export default function ContactsPage() {
   const [contacts, setContacts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  // FIX (M4/H8): track the in-flight request so we can cancel a superseded one.
+  const abortRef = useRef<AbortController | null>(null);
 
   const fetchContacts = (q?: string) => {
+    // Cancel any previous request so a slow earlier response can't overwrite the
+    // results of a newer query (the "stale results" search race).
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setLoading(true);
     const url = q ? `/api/contacts?q=${encodeURIComponent(q)}` : "/api/contacts";
-    fetch(url)
+    fetch(url, { signal: controller.signal })
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((d) => setContacts(d.contacts || []))
-      .catch(() => {
+      .catch((e) => {
+        // Ignore aborts — they mean a newer query took over.
+        if (e?.name === "AbortError") return;
         const list = mockContacts.filter(
           (c) =>
             c.name.toLowerCase().includes((q || "").toLowerCase()) ||
@@ -27,7 +37,10 @@ export default function ContactsPage() {
         );
         setContacts(list);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        // Only the most recent request should clear the loading state.
+        if (abortRef.current === controller) setLoading(false);
+      });
   };
 
   useEffect(() => {
