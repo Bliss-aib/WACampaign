@@ -1,5 +1,12 @@
 import { decrypt } from "./encrypt";
 
+// FIX (L7): the Graph API version was hard-coded as "v18.0" in five places.
+// Make it configurable via META_GRAPH_VERSION so it can be bumped without code
+// edits (Meta deprecates versions on a rolling ~2-year cycle). Default keeps the
+// current behavior.
+const GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v18.0";
+const GRAPH = `https://graph.facebook.com/${GRAPH_VERSION}`;
+
 // FIX (C10): escape RegExp metacharacters so user-supplied strings can be used
 // safely inside a dynamically-built pattern.
 function escapeRegExp(s: string): string {
@@ -22,7 +29,7 @@ export async function sendWhatsAppMessage(
   languageCode: string = "en",
   bodyVariables?: Record<string, string>
 ) {
-  const url = `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`;
+  const url = `${GRAPH}/${phoneNumberId}/messages`;
 
   const body: any = {
     messaging_product: "whatsapp",
@@ -120,7 +127,7 @@ export async function sendWhatsAppText(
   to: string,
   text: string
 ) {
-  const url = `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`;
+  const url = `${GRAPH}/${phoneNumberId}/messages`;
   // Meta wants digits only (no leading "+", spaces, or dashes).
   const recipient = to.replace(/[^0-9]/g, "");
 
@@ -239,7 +246,7 @@ export async function createWhatsAppTemplate(params: {
     bodyComponent.example = { body_text: [examples] };
   }
 
-  const url = `https://graph.facebook.com/v18.0/${wabaId}/message_templates`;
+  const url = `${GRAPH}/${wabaId}/message_templates`;
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -270,7 +277,7 @@ export async function createWhatsAppTemplate(params: {
  */
 export async function getWhatsAppTemplates(accessToken: string, wabaId: string) {
   const url =
-    `https://graph.facebook.com/v18.0/${wabaId}/message_templates` +
+    `${GRAPH}/${wabaId}/message_templates` +
     `?fields=name,status,category,language,id,rejected_reason&limit=200`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
@@ -292,7 +299,7 @@ export async function deleteWhatsAppTemplate(
   name: string
 ) {
   const url =
-    `https://graph.facebook.com/v18.0/${wabaId}/message_templates` +
+    `${GRAPH}/${wabaId}/message_templates` +
     `?name=${encodeURIComponent(name)}`;
   const res = await fetch(url, {
     method: "DELETE",
