@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { supabase } from "@/lib/db/client";
 import { getUserId, getOrCreateBusinessId } from "@/lib/auth";
 import { scheduleCampaign, removeCampaignJob } from "@/lib/queue";
+import { campaignCreateSchema } from "@/lib/validation";
 
 export async function GET(req: Request) {
   const userId = await getUserId();
@@ -46,9 +47,18 @@ export async function POST(req: Request) {
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   await getOrCreateBusinessId(userId);
 
+  // FIX (H1/H9): validate the request body. Previously fields were destructured
+  // untyped and `contactIds.length` crashed when it was missing/not an array.
+  const parsed = campaignCreateSchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Invalid request", details: parsed.error.flatten() },
+      { status: 400 }
+    );
+  }
   // FEATURE (Option A): variableValues holds the values for non-name template
   // variables (e.g. { business, discount, code, link }), applied to every recipient.
-  const { name, templateId, contactIds, scheduledAt, variableValues } = await req.json();
+  const { name, templateId, contactIds, scheduledAt, variableValues } = parsed.data;
 
   const { data: business } = await supabase
     .from("businesses")
@@ -57,6 +67,33 @@ export async function POST(req: Request) {
     .single();
 
   if (!business) return NextResponse.json({ error: "Business not found" }, { status: 404 });
+
+  // FIX (C3): verify the template belongs to THIS business. Without this a user
+  // could reference another tenant's template id.
+  const { data: ownedTemplate } = await supabase
+    .from("templates")
+    .select("id")
+    .eq("id", templateId)
+    .eq("business_id", business.id)
+    .single();
+  if (!ownedTemplate) {
+    return NextResponse.json({ error: "Template not found" }, { status: 404 });
+  }
+
+  // FIX (C3): verify EVERY contact belongs to this business. We fetch the
+  // matching rows scoped to the business and require the count to match the
+  // requested ids — any foreign/invalid id makes the whole request fail.
+  const { data: ownedContacts } = await supabase
+    .from("contacts")
+    .select("id")
+    .eq("business_id", business.id)
+    .in("id", contactIds);
+  if (!ownedContacts || ownedContacts.length !== contactIds.length) {
+    return NextResponse.json(
+      { error: "One or more contacts do not belong to your account" },
+      { status: 403 }
+    );
+  }
 
   // Insert campaign
   const { data: campaign, error: campaignError } = await supabase

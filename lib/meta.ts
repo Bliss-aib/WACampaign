@@ -1,5 +1,11 @@
 import { decrypt } from "./encrypt";
 
+// FIX (C10): escape RegExp metacharacters so user-supplied strings can be used
+// safely inside a dynamically-built pattern.
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 // FIX #7: Number of total attempts (1 initial + retries) for transient failures.
 const MAX_ATTEMPTS = 3;
 
@@ -182,8 +188,11 @@ export function convertBodyToPositional(
 ): { text: string; examples: string[] } {
   let text = body;
   variables.forEach((varName, i) => {
-    // Replace every {{varName}} (allowing inner spaces) with {{i+1}}.
-    const re = new RegExp(`\\{\\{\\s*${varName}\\s*\\}\\}`, "g");
+    // FIX (C10): variable names are user-controlled. Interpolating them straight
+    // into a RegExp let a name like "code[" throw a SyntaxError (crash) — or
+    // worse, inject regex metacharacters. Escape the name before building the
+    // pattern so it's matched literally.
+    const re = new RegExp(`\\{\\{\\s*${escapeRegExp(varName)}\\s*\\}\\}`, "g");
     text = text.replace(re, `{{${i + 1}}}`);
   });
   return { text, examples: variables.map(exampleForVariable) };

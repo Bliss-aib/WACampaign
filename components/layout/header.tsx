@@ -1,5 +1,10 @@
 "use client";
 
+// NOTE (audit Clerk-C2 reviewed & rejected): the audit suggested replacing
+// `Show` with `SignedIn` / `SignedOut`. However, THIS project's pinned build of
+// @clerk/nextjs (v7.4.x in this repo) does not export `SignedIn`/`SignedOut` —
+// it exports `Show` as the supported way to branch on auth state. So `Show` is
+// correct here and the audit recommendation does not apply to this version.
 import { SignInButton, Show, UserButton } from "@clerk/nextjs";
 
 export function Header({ title }: { title: string }) {

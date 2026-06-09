@@ -24,8 +24,14 @@ export async function GET(req: Request) {
     .eq("business_id", businessId)
     .order("created_at", { ascending: false });
 
-  if (q) {
-    query = query.or(`name.ilike.%${q}%,phone_number.ilike.%${q}%`);
+  // FIX (C2): the raw `q` was interpolated straight into a PostgREST `.or()`
+  // filter string. PostgREST treats commas and parentheses as filter syntax, so
+  // a value like `%),name.eq.admin` could inject extra conditions and leak data.
+  // Strip the characters that carry meaning in the filter grammar (commas,
+  // parentheses, backslash) and the `%`/`*` wildcards, leaving a plain substring.
+  const safeQ = q.replace(/[,()\\%*]/g, "").trim();
+  if (safeQ) {
+    query = query.or(`name.ilike.%${safeQ}%,phone_number.ilike.%${safeQ}%`);
   }
 
   const { data, error } = await query;

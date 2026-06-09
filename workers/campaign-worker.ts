@@ -44,144 +44,124 @@ const worker = new Worker(
     // Update campaign status to sending
     await supabase.from("campaigns").update({ status: "sending" }).eq("id", campaignId);
 
+    // ── Template invariants (same for every contact) — compute once. ──────────
+    // FIX (campaign send): parameters are built from the variables the template
+    // ACTUALLY declares (filling {{name}} per-contact, other vars from the
+    // campaign-level values). Meta identifies templates by NAME + language.
+    const tpl = campaign.templates;
+    const declaredVars: string[] = Array.isArray(tpl?.variables) ? (tpl!.variables as string[]) : [];
+    const campaignVars: Record<string, string> = campaign.variable_values || {};
+    const templateName = tpl?.meta_template_name || tpl?.name;
+    const templateLanguage = tpl?.language || "en_US";
+
+    // FEATURE: only APPROVED templates may be sent. This doesn't vary per contact,
+    // so fail the whole pending batch fast instead of per-row inside the loop.
+    if (tpl?.status !== "approved" || !templateName) {
+      const reason = !templateName
+        ? "Template name missing"
+        : `Template is not approved by Meta (status: ${tpl?.status || "unknown"})`;
+      await supabase
+        .from("campaign_contacts")
+        .update({ status: "failed", error_message: reason })
+        .eq("campaign_id", campaignId)
+        .eq("status", "pending");
+      await supabase.rpc("recalc_campaign_counts", { p_campaign_id: campaignId });
+      await supabase
+        .from("campaigns")
+        .update({ status: "completed", updated_at: new Date().toISOString() })
+        .eq("id", campaignId);
+      return;
+    }
+
+    const today = new Date().toISOString().split("T")[0];
+    let pausedForLimit = false;
+
     for (const cc of contacts) {
       const contact = cc.contacts;
       if (!contact) continue;
 
-      // Check daily limit
-      const today = new Date().toISOString().split("T")[0];
-      const { data: usage } = await supabase
-        .from("daily_usage")
-        .select("count")
-        .eq("business_id", business.id)
-        .eq("date", today)
-        .single();
+      // FIX (C8): atomically claim this contact (pending -> sending) BEFORE the
+      // send. A retried job (e.g. after a crash) or a second worker can't send to
+      // the same person twice: the conditional update only succeeds for the first
+      // claimant; everyone else gets 0 rows and skips. Contacts left in 'sending'
+      // after a crash are intentionally NOT auto-resent (avoids duplicates) and
+      // can be reconciled manually.
+      const { data: claimed } = await supabase
+        .from("campaign_contacts")
+        .update({ status: "sending" })
+        .eq("id", cc.id)
+        .eq("status", "pending")
+        .select("id")
+        .maybeSingle();
+      if (!claimed) continue;
 
-      const used = usage?.count || 0;
-      if (used >= dailyLimit) {
-        await supabase
-          .from("campaign_contacts")
-          .update({ status: "failed", error_message: "Daily limit reached" })
-          .eq("id", cc.id);
-        continue;
+      // FIX (C9 + H12): atomically reserve one daily-send slot. This can never
+      // exceed the limit even under concurrency. When the limit is hit we revert
+      // this contact to 'pending' and PAUSE the campaign (resumable) instead of
+      // marking everything failed + 'completed' as the old code did.
+      const { data: allowed, error: claimErr } = await supabase.rpc("claim_daily_send", {
+        p_business_id: business.id,
+        p_date: today,
+        p_limit: dailyLimit,
+      });
+      if (claimErr || !allowed) {
+        await supabase.from("campaign_contacts").update({ status: "pending" }).eq("id", cc.id);
+        pausedForLimit = true;
+        break;
       }
 
-      // FIX (campaign send): Build template parameters from the variables the
-      // template ACTUALLY declares — not a blanket { name }. The old code always
-      // sent a "name" parameter, so a template with zero variables (like the
-      // sample "hello_world") was rejected with:
-      //   (#132000) Number of parameters does not match the expected number of params
-      // We iterate the template's declared variables (stored on the template row)
-      // in order, filling "name" from the contact and leaving others blank for now
-      // (future: source these from contact custom fields). If the template has no
-      // variables, we send none — which matches Meta's expectation.
-      const declaredVars: string[] = Array.isArray(campaign.templates?.variables)
-        ? (campaign.templates!.variables as string[])
-        : [];
-      // FEATURE (Option A): non-name variables come from the campaign's stored
-      // values (same for every recipient); {{name}} comes from the contact.
-      const campaignVars: Record<string, string> = campaign.variable_values || {};
+      // Build this contact's template parameters.
       const variables: Record<string, string> = {};
       for (const v of declaredVars) {
         variables[v] = v === "name" ? contact.name || "" : campaignVars[v] || "";
       }
 
-      // FEATURE: Only send templates Meta has APPROVED. Sending a 'local',
-      // 'pending', or 'rejected' template would fail at Meta with #132001
-      // ("does not exist in the translation"), so we fail fast with a clear
-      // reason instead of burning a send attempt.
-      if (campaign.templates?.status !== "approved") {
-        await supabase
-          .from("campaign_contacts")
-          .update({
-            status: "failed",
-            error_message: `Template is not approved by Meta (status: ${campaign.templates?.status || "unknown"})`,
-          })
-          .eq("id", cc.id);
-        continue;
-      }
-
-      // FIX #1 + FEATURE: Meta identifies templates by their NAME (not our DB id).
-      // Prefer `meta_template_name` (the normalized name Meta knows it by); fall
-      // back to the display name for the pre-existing sample template.
-      const templateName = campaign.templates?.meta_template_name || campaign.templates?.name;
-      if (!templateName) {
-        await supabase
-          .from("campaign_contacts")
-          .update({ status: "failed", error_message: "Template name missing" })
-          .eq("id", cc.id);
-        continue;
-      }
-
-      // FIX (campaign send): use the template's stored language code. Meta needs
-      // the exact translation (e.g. "en_US"); a wrong code yields error #132001.
-      const templateLanguage = campaign.templates?.language || "en_US";
-
-      // Send message
-      const { ok, data } = await sendWhatsAppMessage(
-        accessToken,
-        phoneNumberId,
-        contact.phone_number,
-        templateName, // FIX #1: pass the Meta template name (was campaign.template_id)
-        templateLanguage, // FIX: was hard-coded "en"
-        variables
-      );
-
-      if (ok && data.messages?.[0]?.id) {
-        await supabase
-          .from("campaign_contacts")
-          .update({
-            status: "sent",
-            meta_message_id: data.messages[0].id,
-            sent_at: new Date().toISOString(),
-          })
-          .eq("id", cc.id);
-
-        // Increment daily usage
-        await supabase.from("daily_usage").upsert(
-          {
-            business_id: business.id,
-            date: today,
-            count: used + 1,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "business_id,date" }
+      // FIX (H11): wrap the send so a single network throw fails only THIS contact
+      // instead of crashing the whole job (which previously restarted from the
+      // beginning, re-processing earlier contacts).
+      try {
+        const { ok, data } = await sendWhatsAppMessage(
+          accessToken,
+          phoneNumberId,
+          contact.phone_number,
+          templateName,
+          templateLanguage,
+          variables
         );
-      } else {
+
+        if (ok && data.messages?.[0]?.id) {
+          await supabase
+            .from("campaign_contacts")
+            .update({
+              status: "sent",
+              meta_message_id: data.messages[0].id,
+              sent_at: new Date().toISOString(),
+            })
+            .eq("id", cc.id);
+        } else {
+          await supabase
+            .from("campaign_contacts")
+            .update({ status: "failed", error_message: data?.error?.message || "Unknown error" })
+            .eq("id", cc.id);
+        }
+      } catch (err: any) {
         await supabase
           .from("campaign_contacts")
-          .update({
-            status: "failed",
-            error_message: data.error?.message || "Unknown error",
-          })
+          .update({ status: "failed", error_message: err?.message || "Send threw an exception" })
           .eq("id", cc.id);
       }
     }
 
-    // Update campaign aggregates and status
-    const { data: finalCounts } = await supabase
-      .from("campaign_contacts")
-      .select("status")
-      .eq("campaign_id", campaignId);
-
-    if (finalCounts) {
-      const sent = finalCounts.filter((c: any) => ["sent", "delivered", "read"].includes(c.status)).length;
-      const delivered = finalCounts.filter((c: any) => ["delivered", "read"].includes(c.status)).length;
-      const read = finalCounts.filter((c: any) => c.status === "read").length;
-      const failed = finalCounts.filter((c: any) => c.status === "failed").length;
-
-      await supabase
-        .from("campaigns")
-        .update({
-          status: "completed",
-          sent_count: sent,
-          delivered_count: delivered,
-          read_count: read,
-          failed_count: failed,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", campaignId);
-    }
+    // FIX (C7): recompute aggregates atomically in the DB (no read-then-write race).
+    await supabase.rpc("recalc_campaign_counts", { p_campaign_id: campaignId });
+    // FIX (H12): a daily-limit stop is 'paused' (resumable later); otherwise done.
+    await supabase
+      .from("campaigns")
+      .update({
+        status: pausedForLimit ? "paused" : "completed",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", campaignId);
   },
   { connection: getRedis(), concurrency: 1 }
 );

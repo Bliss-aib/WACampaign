@@ -19,6 +19,13 @@ const APP_SECRET = process.env.META_APP_SECRET!;
  */
 function isValidMetaSignature(rawBody: string, signatureHeader: string | null): boolean {
   if (!APP_SECRET) {
+    // FIX (C6): never skip verification in production. If the secret is missing
+    // there (a misconfiguration), REJECT the request — otherwise anyone could
+    // forge webhooks. Only allow the skip in non-production for local testing.
+    if (process.env.NODE_ENV === "production") {
+      console.error("[meta webhook] META_APP_SECRET is not set in production — rejecting request.");
+      return false;
+    }
     console.warn("[meta webhook] META_APP_SECRET not set — skipping signature verification (dev only).");
     return true;
   }
@@ -90,11 +97,39 @@ export async function POST(req: Request) {
             update.rejection_reason =
               newStatus === "rejected" ? v.reason || v.rejected_reason || "Rejected by Meta" : null;
 
-            // Match by Meta's template id when we have it; otherwise by name.
-            let q = supabase.from("templates").update(update);
-            q = metaTemplateId ? q.eq("meta_template_id", metaTemplateId) : q.eq("meta_template_name", metaTemplateName);
-            const { error: tplErr } = await q;
-            if (tplErr) console.error("Failed to sync template status:", tplErr.message);
+            // FIX (C4): scope the update to the business that owns this WABA.
+            // Previously the update matched only by meta_template_id, or fell back
+            // to meta_template_name — and template names are NOT globally unique,
+            // so a name-only match could flip the status of every business's
+            // template with that name. entry.id is the WABA id for these events.
+            const wabaId = entry.id ? String(entry.id) : null;
+            const { data: ownerBiz } = wabaId
+              ? await supabase.from("businesses").select("id").eq("waba_id", wabaId).single()
+              : { data: null };
+
+            if (ownerBiz?.id) {
+              // Resolved the owner — scope to it, then match by id (preferred) or name.
+              let q = supabase.from("templates").update(update).eq("business_id", ownerBiz.id);
+              q = metaTemplateId
+                ? q.eq("meta_template_id", metaTemplateId)
+                : q.eq("meta_template_name", metaTemplateName);
+              const { error: tplErr } = await q;
+              if (tplErr) console.error("Failed to sync template status:", tplErr.message);
+            } else if (metaTemplateId) {
+              // Can't resolve the business, but meta_template_id IS globally unique,
+              // so matching on it alone is safe.
+              const { error: tplErr } = await supabase
+                .from("templates")
+                .update(update)
+                .eq("meta_template_id", metaTemplateId);
+              if (tplErr) console.error("Failed to sync template status:", tplErr.message);
+            } else {
+              // No business and only a non-unique name → refuse, to avoid
+              // clobbering other tenants' templates.
+              console.warn(
+                "[meta webhook] template status update skipped: unresolved business and no meta_template_id."
+              );
+            }
           }
           continue; // handled this change
         }
@@ -129,23 +164,14 @@ export async function POST(req: Request) {
               .update(update)
               .eq("id", campaignContact.id);
 
-            // Update campaign aggregate counts
-            const { data: counts } = await supabase
-              .from("campaign_contacts")
-              .select("status")
-              .eq("campaign_id", campaignContact.campaign_id);
-
-            if (counts) {
-              const sent = counts.filter((c: any) => ["sent", "delivered", "read"].includes(c.status)).length;
-              const delivered = counts.filter((c: any) => ["delivered", "read"].includes(c.status)).length;
-              const read = counts.filter((c: any) => c.status === "read").length;
-              const failed = counts.filter((c: any) => c.status === "failed").length;
-
-              await supabase
-                .from("campaigns")
-                .update({ sent_count: sent, delivered_count: delivered, read_count: read, failed_count: failed })
-                .eq("id", campaignContact.campaign_id);
-            }
+            // FIX (C7): recompute the campaign's aggregate counts atomically in the
+            // DB. The old code read every campaign_contact row, counted in JS, then
+            // wrote the totals back — so two webhook deliveries arriving at once
+            // would both read the old state and the second write would clobber the
+            // first (lost update), permanently corrupting the counts.
+            await supabase.rpc("recalc_campaign_counts", {
+              p_campaign_id: campaignContact.campaign_id,
+            });
           }
 
           // ── Handle INCOMING messages from contacts ──
