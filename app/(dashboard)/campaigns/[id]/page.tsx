@@ -21,6 +21,14 @@ import { ArrowLeft } from "lucide-react";
 import { format } from "date-fns";
 import { mockCampaigns, mockContacts } from "@/lib/mock-data";
 
+// FIX (M2): date-fns `format` throws "Invalid time value" for an invalid or
+// missing date (e.g. new Date(undefined)). Guard the parse and fall back to "—".
+function safeFormat(value: string | number | Date | null | undefined, fmt: string): string {
+  if (!value) return "—";
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? "—" : format(d, fmt);
+}
+
 export default function CampaignDetailPage() {
   const params = useParams();
   const id = params.id as string;
@@ -89,7 +97,7 @@ export default function CampaignDetailPage() {
           <div className="mt-1 flex items-center gap-2">
             <CampaignStatusBadge status={campaign.status} />
             <span className="text-xs text-zinc-400">
-              Created {format(new Date(campaign.created_at || campaign.createdAt), "MMM d, yyyy")}
+              Created {safeFormat(campaign.created_at || campaign.createdAt, "MMM d, yyyy")}
             </span>
           </div>
         </div>
@@ -122,9 +130,7 @@ export default function CampaignDetailPage() {
             <div className="flex justify-between">
               <span className="text-zinc-500">Scheduled</span>
               <span className="text-black">
-                {campaign.scheduled_at || campaign.scheduledAt
-                  ? format(new Date(campaign.scheduled_at || campaign.scheduledAt), "MMM d, h:mm a")
-                  : "—"}
+                {safeFormat(campaign.scheduled_at || campaign.scheduledAt, "MMM d, h:mm a")}
               </span>
             </div>
             <div className="flex justify-between">

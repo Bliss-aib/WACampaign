@@ -29,7 +29,10 @@ export function TemplateCard({
 
   // Default to "local" when the field is absent (e.g. mock data).
   const status: TemplateStatus = template.status || "local";
-  const statusCfg = STATUS_CONFIG[status];
+  // FIX (M3): an unexpected status value (not in STATUS_CONFIG) made statusCfg
+  // undefined and crashed on statusCfg.label/className. Fall back to the 'local'
+  // styling for any unknown status.
+  const statusCfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.local;
   // A template can be (re)submitted to Meta when it hasn't been approved yet.
   const canSubmit = status === "local" || status === "rejected";
 

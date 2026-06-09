@@ -7,6 +7,7 @@ import { ProfileCard } from "@/components/settings/profile-card";
 import { DangerZone } from "@/components/settings/danger-zone";
 import { Skeleton } from "@/components/ui/skeleton";
 import { mockBusiness } from "@/lib/mock-data";
+import { toast } from "sonner";
 
 export default function SettingsPage() {
   const [business, setBusiness] = useState<any>(null);
@@ -38,27 +39,27 @@ export default function SettingsPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ access_token: token, waba_id: wabaId, phone_number_id: phoneId }),
     });
-    if (res.ok) fetchData();
-    else {
-      setBusiness((prev: any) => ({
-        ...prev,
-        connectionStatus: "connected",
-        wabaId,
-        phoneNumberId: phoneId,
-      }));
+    // FIX (H7): previously the failure branch faked a "Connected" state with the
+    // entered credentials, so a rejected/invalid connection still looked
+    // successful. Surface the real error and leave the actual state untouched.
+    if (res.ok) {
+      toast.success("WhatsApp connected");
+      fetchData();
+    } else {
+      const err = await res.json().catch(() => ({}));
+      toast.error(err.error || "Failed to connect WhatsApp");
     }
   };
 
   const handleDisconnect = async () => {
     const res = await fetch("/api/business", { method: "DELETE" });
-    if (res.ok) fetchData();
-    else {
-      setBusiness((prev: any) => ({
-        ...prev,
-        connectionStatus: "disconnected",
-        wabaId: "",
-        phoneNumberId: "",
-      }));
+    // FIX (H7): same problem on disconnect — don't fake success on failure.
+    if (res.ok) {
+      toast.success("WhatsApp disconnected");
+      fetchData();
+    } else {
+      const err = await res.json().catch(() => ({}));
+      toast.error(err.error || "Failed to disconnect WhatsApp");
     }
   };
 
