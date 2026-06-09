@@ -18,6 +18,11 @@ export const proxy = clerkMiddleware(async (auth, request) => {
     (p) => path === p || path.startsWith(p + "/")
   );
 
+  // Redirect signed-in users away from auth pages to dashboard
+  if (userId && (path.startsWith("/sign-in") || path.startsWith("/sign-up"))) {
+    return NextResponse.redirect(new URL("/dashboard", request.url));
+  }
+
   if (isProtected && !userId) {
     return redirectToSignIn({ returnBackUrl: request.url });
   }

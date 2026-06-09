@@ -102,19 +102,19 @@ export default function HomePage() {
               Pricing
             </Link>
             <Show when="signed-out">
-              <SignInButton>
-                <button className="text-sm font-medium text-zinc-500 transition-colors hover:text-black">
-                  Sign in
-                </button>
-              </SignInButton>
-              <SignUpButton>
-                <Button
-                  size="sm"
-                  className="bg-black text-white hover:bg-zinc-800"
-                >
-                  Sign up
-                </Button>
-              </SignUpButton>
+              <Link
+                href="/sign-in"
+                className="text-sm font-medium text-zinc-500 transition-colors hover:text-black"
+              >
+                Sign in
+              </Link>
+              <Button
+                asChild
+                size="sm"
+                className="bg-black text-white hover:bg-zinc-800"
+              >
+                <Link href="/sign-up">Sign up</Link>
+              </Button>
             </Show>
             <Show when="signed-in">
               <UserButton />
