@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/db/client";
 import { getUserId, getOrCreateBusinessId } from "@/lib/auth";
+import { contactCreateSchema } from "@/lib/validation";
 
 async function getBusinessId(userId: string) {
   const { data } = await supabase.from("businesses").select("id").eq("user_id", userId).single();
@@ -59,7 +60,15 @@ export async function POST(req: Request) {
   const businessId = await getBusinessId(userId);
   if (!businessId) return NextResponse.json({ error: "Business not found" }, { status: 404 });
 
-  const { name, phone_number } = await req.json();
+  // FIX (H9): validate + normalize the body (was inserted untyped).
+  const parsed = contactCreateSchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Invalid request", details: parsed.error.flatten() },
+      { status: 400 }
+    );
+  }
+  const { name, phone_number } = parsed.data;
 
   const { data, error } = await supabase
     .from("contacts")

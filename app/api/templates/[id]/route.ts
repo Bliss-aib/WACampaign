@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/db/client";
 import { getUserId, getOrCreateBusinessId } from "@/lib/auth";
+import { templateUpdateSchema } from "@/lib/validation";
 
 async function getBusinessId(userId: string) {
   const { data } = await supabase.from("businesses").select("id").eq("user_id", userId).single();
@@ -16,7 +17,15 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
   if (!businessId) return NextResponse.json({ error: "Business not found" }, { status: 404 });
 
   const { id } = await params;
-  const { name, body, variables, imageUrls } = await req.json();
+  // FIX (H9): validate the body (was destructured untyped).
+  const parsed = templateUpdateSchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Invalid request", details: parsed.error.flatten() },
+      { status: 400 }
+    );
+  }
+  const { name, body, variables, imageUrls } = parsed.data;
 
   // FEATURE: Editing a template's content invalidates any prior Meta approval —
   // Meta versions templates, so a changed body must be re-submitted. Reset the
@@ -53,11 +62,14 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
 
   const { id } = await params;
 
-  const { error } = await supabase
+  // FIX (H4): use .select() so we can tell whether a row was actually deleted
+  // (Supabase returns no error for a 0-row delete) and return 404 otherwise.
+  const { data, error } = await supabase
     .from("templates")
     .delete()
     .eq("id", id)
-    .eq("business_id", businessId);
+    .eq("business_id", businessId)
+    .select("id");
 
   if (error) {
     // FIX #3: Templates referenced by a campaign are protected by a
@@ -72,6 +84,9 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
       );
     }
     return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+  if (!data || data.length === 0) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   return NextResponse.json({ success: true });
 }

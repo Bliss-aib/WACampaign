@@ -85,10 +85,16 @@ export async function sendWhatsAppMessage(
     // Transient error with attempts remaining — wait, then retry.
     // Prefer the server-provided Retry-After (seconds); otherwise back off
     // exponentially: 1s after attempt 1, 3s after attempt 2, ...
+    // FIX (H16): `Number(retryAfterHeader)` is NaN for a non-numeric header
+    // (Meta can send an HTTP-date). sleep(NaN) resolves immediately, causing a
+    // rapid-fire retry storm. Only use the header when it parses to a finite
+    // positive number; otherwise fall back to exponential backoff.
     const retryAfterHeader = res.headers.get("retry-after");
-    const backoffMs = retryAfterHeader
-      ? Number(retryAfterHeader) * 1000
-      : Math.pow(3, attempt - 1) * 1000;
+    const retryAfterSec = retryAfterHeader ? Number(retryAfterHeader) : NaN;
+    const backoffMs =
+      Number.isFinite(retryAfterSec) && retryAfterSec > 0
+        ? retryAfterSec * 1000
+        : Math.pow(3, attempt - 1) * 1000;
 
     console.warn(
       `[meta] send to ${to} failed (HTTP ${res.status}), attempt ${attempt}/${MAX_ATTEMPTS}. Retrying in ${backoffMs}ms.`
@@ -292,6 +298,20 @@ export async function deleteWhatsAppTemplate(
     method: "DELETE",
     headers: { Authorization: `Bearer ${accessToken}` },
   });
-  const data = await res.json();
+  // FIX (H15): a DELETE can return 204 No Content (empty body). Calling
+  // res.json() on an empty body throws a SyntaxError. Read as text first and
+  // parse only if there's something to parse.
+  const data = await safeJson(res);
   return { ok: res.ok, data };
+}
+
+/** Parse a fetch Response as JSON, tolerating empty (e.g. 204) bodies. */
+async function safeJson(res: Response): Promise<any> {
+  const raw = await res.text();
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { raw };
+  }
 }
