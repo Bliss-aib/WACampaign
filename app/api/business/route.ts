@@ -35,7 +35,21 @@ export async function POST(req: Request) {
   }
   const { access_token, waba_id, phone_number_id, name } = parsed.data;
 
-  const encryptedToken = encrypt(access_token);
+  // FIX: encrypt() throws if ENCRYPTION_KEY is not configured (a common
+  // deploy-time misconfiguration on a fresh host). Catch it and return a clear
+  // JSON error instead of an opaque 500 with no body — otherwise the dashboard
+  // can only show its generic "Failed to connect" fallback and the real cause
+  // (missing env var) stays hidden.
+  let encryptedToken: string;
+  try {
+    encryptedToken = encrypt(access_token);
+  } catch (e: any) {
+    console.error("[business] token encryption failed:", e?.message);
+    return NextResponse.json(
+      { error: "Server is misconfigured (ENCRYPTION_KEY missing). Contact the administrator." },
+      { status: 500 }
+    );
+  }
 
   // FIX: getOrCreateBusinessId (above) guarantees a row already exists for this
   // user_id. Without an explicit onConflict target, upsert defaults to the
