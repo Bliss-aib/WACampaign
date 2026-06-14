@@ -10,8 +10,8 @@ import { mockTemplates, Template } from "@/lib/mock-data";
 // FIX #2 / #3: use toast notifications so save/delete failures are visible to the
 // user instead of being silently swallowed.
 import { toast } from "sonner";
-// FEATURE (Option A): manual status refresh from Meta.
-import { RefreshCw } from "lucide-react";
+// FEATURE (Option A): manual status refresh from Meta. (Import) recover from Meta.
+import { RefreshCw, Download } from "lucide-react";
 
 export default function TemplatesPage() {
   const [templates, setTemplates] = useState<any[]>([]);
@@ -21,6 +21,8 @@ export default function TemplatesPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   // FEATURE (Option A): track the refresh-from-Meta in-flight state.
   const [refreshing, setRefreshing] = useState(false);
+  // FEATURE (Import from Meta): track the import-from-Meta in-flight state.
+  const [importing, setImporting] = useState(false);
 
   const fetchTemplates = () => {
     setLoading(true);
@@ -101,6 +103,30 @@ export default function TemplatesPage() {
     }
   };
 
+  // FEATURE (Import from Meta): recover templates that exist on the Meta WABA but
+  // are missing locally (e.g. after deleting the account and signing back in, the
+  // Meta templates remain but the local rows are gone). This re-imports them so
+  // they can be used again without hitting "already exists" on re-creation.
+  const handleImportFromMeta = async () => {
+    setImporting(true);
+    try {
+      const res = await fetch("/api/templates/import", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        toast.success(
+          data.imported > 0
+            ? `Imported ${data.imported} template${data.imported > 1 ? "s" : ""} from Meta`
+            : "No new templates found on Meta to import"
+        );
+        fetchTemplates();
+      } else {
+        toast.error(data.error || "Failed to import templates from Meta");
+      }
+    } finally {
+      setImporting(false);
+    }
+  };
+
   // FEATURE: Submit a local/rejected template to Meta for approval.
   const handleSubmitToMeta = async (id: string) => {
     const res = await fetch(`/api/templates/${id}/submit`, { method: "POST" });
@@ -165,6 +191,16 @@ export default function TemplatesPage() {
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-black">My Templates</h2>
           <div className="flex items-center gap-2">
+            {/* FEATURE (Import from Meta): recover templates that exist on the WABA */}
+            <button
+              onClick={handleImportFromMeta}
+              disabled={importing}
+              className="flex items-center gap-1.5 rounded-md border border-zinc-200 px-3 py-2 text-sm text-black hover:bg-zinc-50 disabled:opacity-50"
+              title="Import templates that already exist on your Meta WhatsApp account"
+            >
+              <Download className={`h-3.5 w-3.5 ${importing ? "animate-pulse" : ""}`} />
+              {importing ? "Importing..." : "Import from Meta"}
+            </button>
             {/* FEATURE (Option A): manual "Refresh status" from Meta */}
             <button
               onClick={handleRefreshStatus}
