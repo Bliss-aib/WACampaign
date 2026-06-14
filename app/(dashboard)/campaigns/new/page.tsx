@@ -60,7 +60,12 @@ export default function NewCampaignPage() {
         name,
         templateId: selectedTemplate,
         contactIds: selectedContacts,
-        scheduledAt: schedule || null,
+        // FIX (timezone): the datetime-local input gives a naive string like
+        // "2026-06-14T21:09" with no zone. Convert it to a real UTC ISO here in
+        // the browser — where the user's timezone is known — so the server
+        // stores the correct instant. Previously the raw string was sent and the
+        // UTC server parsed it as UTC, shifting the time by the user's offset.
+        scheduledAt: schedule ? new Date(schedule).toISOString() : null,
         variableValues, // FEATURE (Option A)
       }),
     });
