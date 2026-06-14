@@ -143,6 +143,83 @@ export async function refreshTemplateStatuses(businessId: string) {
   return { ok: true, updated };
 }
 
+// ─── Import: positional -> named variable inference ─────────────────────────
+//
+// Meta stores body placeholders POSITIONALLY ({{1}}, {{2}}, ...) and keeps only
+// the example values — never the original variable names. But our own
+// createWhatsAppTemplate (see lib/meta exampleForVariable) generates predictable
+// example values per name, so we can reverse them back to names on import.
+
+// Exact reverse of exampleForVariable()'s outputs.
+const EXAMPLE_TO_NAME: Record<string, string> = {
+  Alex: "name",
+  "Acme Co": "business",
+  "20%": "discount",
+  SAVE20: "code",
+  "https://example.com": "link",
+  "May 25": "date",
+};
+
+/**
+ * Infer a friendly variable name for positional placeholder `index` (1-based)
+ * from its example value. Falls back to heuristics, then to "varN".
+ */
+function inferVariableName(example: unknown, index: number): string {
+  const raw = typeof example === "string" ? example.trim() : "";
+  if (!raw) return `var${index}`;
+
+  // 1. Exact match against the examples our own submitter produces.
+  if (EXAMPLE_TO_NAME[raw]) return EXAMPLE_TO_NAME[raw];
+
+  // 2. Heuristics for templates created outside this app.
+  if (/^https?:\/\//i.test(raw)) return "link";
+  if (/%$/.test(raw)) return "discount";
+  if (/^\$?\d+(\.\d+)?$/.test(raw)) return "price";
+  if (/^[A-Z0-9]{4,}$/.test(raw)) return "code";
+  if (
+    /\d{4}-\d{2}-\d{2}/.test(raw) ||
+    /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(raw)
+  )
+    return "date";
+
+  return `var${index}`;
+}
+
+/**
+ * Convert a Meta BODY component (positional placeholders + example values) into
+ * a body with NAMED placeholders and the matching ordered variable list.
+ */
+function namedBodyFromComponent(bodyText: string, examples: unknown[]): { body: string; variables: string[] } {
+  // Highest placeholder index present in the text.
+  const indices = Array.from(bodyText.matchAll(/\{\{\s*(\d+)\s*\}\}/g)).map((x: any) =>
+    parseInt(x[1], 10)
+  );
+  const maxIdx = indices.length ? Math.max(...indices) : 0;
+  if (maxIdx === 0) return { body: bodyText, variables: [] };
+
+  const used = new Set<string>();
+  const variables: string[] = [];
+  let body = bodyText;
+
+  for (let i = 1; i <= maxIdx; i++) {
+    let name = inferVariableName(examples[i - 1], i);
+    // De-duplicate collisions (e.g. two URL variables both -> "link").
+    if (used.has(name)) {
+      let suffix = 2;
+      while (used.has(`${name}${suffix}`)) suffix++;
+      name = `${name}${suffix}`;
+    }
+    used.add(name);
+    variables.push(name);
+
+    // Replace every {{i}} (allowing inner spaces) with {{name}}.
+    const re = new RegExp(`\\{\\{\\s*${i}\\s*\\}\\}`, "g");
+    body = body.replace(re, `{{${name}}}`);
+  }
+
+  return { body, variables };
+}
+
 /**
  * FEATURE (Import from Meta): recover templates that exist on the Meta WABA but
  * are missing from the local DB.
@@ -154,9 +231,8 @@ export async function refreshTemplateStatuses(businessId: string) {
  * meta_template_name we don't already have locally, reconstructing the body and
  * variables from the BODY component.
  *
- * Note: Meta stores body placeholders POSITIONALLY ({{1}}, {{2}}, ...) and does
- * not keep the original variable names, so imported templates use positional
- * variables. They remain fully sendable; only the variable labels differ.
+ * Placeholders are relabelled from positional ({{1}}) back to named variables
+ * by inferring names from the example values Meta stores (see inferVariableName).
  */
 export async function importTemplatesFromMeta(businessId: string) {
   const { data: business } = await supabase
@@ -208,18 +284,13 @@ export async function importTemplatesFromMeta(businessId: string) {
     if (!metaName || seen.has(metaName)) continue; // already local or duplicate language row
     seen.add(metaName);
 
-    // Reconstruct the body from the BODY component.
+    // Reconstruct the body from the BODY component, relabelling placeholders.
     const bodyComp = (m.components || []).find(
       (c: any) => String(c.type).toUpperCase() === "BODY"
     );
-    const body = bodyComp?.text || "";
-
-    // Positional placeholders ({{1}}, {{2}}, ...) -> variable list ["1","2",...].
-    const indices = Array.from(body.matchAll(/\{\{\s*(\d+)\s*\}\}/g)).map((x: any) =>
-      parseInt(x[1], 10)
-    );
-    const maxIdx = indices.length ? Math.max(...indices) : 0;
-    const variables = Array.from({ length: maxIdx }, (_, i) => String(i + 1));
+    const rawBody = bodyComp?.text || "";
+    const examples: unknown[] = bodyComp?.example?.body_text?.[0] || [];
+    const { body, variables } = namedBodyFromComponent(rawBody, examples);
 
     const status = META_STATUS_MAP[String(m.status).toUpperCase()] || "approved";
     const rejection =
