@@ -142,3 +142,116 @@ export async function refreshTemplateStatuses(businessId: string) {
 
   return { ok: true, updated };
 }
+
+/**
+ * FEATURE (Import from Meta): recover templates that exist on the Meta WABA but
+ * are missing from the local DB.
+ *
+ * Scenario: a user deletes their account (which wipes their local template rows)
+ * and later signs back in. The templates still live on the Meta WABA, so trying
+ * to re-create them fails with "There is already English (US) content for this
+ * template." This pulls every template from Meta and inserts any whose
+ * meta_template_name we don't already have locally, reconstructing the body and
+ * variables from the BODY component.
+ *
+ * Note: Meta stores body placeholders POSITIONALLY ({{1}}, {{2}}, ...) and does
+ * not keep the original variable names, so imported templates use positional
+ * variables. They remain fully sendable; only the variable labels differ.
+ */
+export async function importTemplatesFromMeta(businessId: string) {
+  const { data: business } = await supabase
+    .from("businesses")
+    .select("waba_id, access_token, connection_status")
+    .eq("id", businessId)
+    .single();
+
+  if (!business || business.connection_status !== "connected" || !business.waba_id || !business.access_token) {
+    return { ok: false, error: "WhatsApp is not connected. Connect it in Settings first." };
+  }
+
+  const token = decrypt(business.access_token);
+
+  // Fetch templates WITH their components so we can reconstruct the body. (The
+  // shared getWhatsAppTemplates omits components, so we request them here.)
+  const graphVersion = process.env.META_GRAPH_VERSION || "v18.0";
+  const url =
+    `https://graph.facebook.com/${graphVersion}/${business.waba_id}/message_templates` +
+    `?fields=name,status,category,language,id,rejected_reason,components&limit=200`;
+
+  let metaTemplates: any[] = [];
+  try {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error?.message || "Failed to fetch templates from Meta." };
+    }
+    metaTemplates = Array.isArray(data?.data) ? data.data : [];
+  } catch (e: any) {
+    return { ok: false, error: e?.message || "Could not reach Meta." };
+  }
+
+  // Names we already have locally — skip those.
+  const { data: locals } = await supabase
+    .from("templates")
+    .select("meta_template_name, name")
+    .eq("business_id", businessId);
+  const existing = new Set<string>();
+  for (const l of locals || []) {
+    if (l.meta_template_name) existing.add(String(l.meta_template_name));
+    if (l.name) existing.add(String(l.name));
+  }
+
+  const rows: any[] = [];
+  const seen = new Set<string>(existing);
+  for (const m of metaTemplates) {
+    const metaName: string = m.name;
+    if (!metaName || seen.has(metaName)) continue; // already local or duplicate language row
+    seen.add(metaName);
+
+    // Reconstruct the body from the BODY component.
+    const bodyComp = (m.components || []).find(
+      (c: any) => String(c.type).toUpperCase() === "BODY"
+    );
+    const body = bodyComp?.text || "";
+
+    // Positional placeholders ({{1}}, {{2}}, ...) -> variable list ["1","2",...].
+    const indices = Array.from(body.matchAll(/\{\{\s*(\d+)\s*\}\}/g)).map((x: any) =>
+      parseInt(x[1], 10)
+    );
+    const maxIdx = indices.length ? Math.max(...indices) : 0;
+    const variables = Array.from({ length: maxIdx }, (_, i) => String(i + 1));
+
+    const status = META_STATUS_MAP[String(m.status).toUpperCase()] || "approved";
+    const rejection =
+      status === "rejected"
+        ? m.rejected_reason && m.rejected_reason !== "NONE"
+          ? m.rejected_reason
+          : "Rejected by Meta"
+        : null;
+
+    rows.push({
+      business_id: businessId,
+      name: metaName,
+      body,
+      variables,
+      image_urls: null,
+      language: m.language || "en_US",
+      status,
+      meta_template_id: m.id ? String(m.id) : null,
+      meta_template_name: metaName,
+      rejection_reason: rejection,
+      submitted_at: new Date().toISOString(),
+    });
+  }
+
+  if (rows.length === 0) {
+    return { ok: true, imported: 0 };
+  }
+
+  const { data: inserted, error } = await supabase.from("templates").insert(rows).select("id");
+  if (error) {
+    return { ok: false, error: error.message };
+  }
+
+  return { ok: true, imported: inserted?.length || 0 };
+}
