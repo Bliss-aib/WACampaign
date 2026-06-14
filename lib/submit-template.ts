@@ -326,3 +326,164 @@ export async function importTemplatesFromMeta(businessId: string) {
 
   return { ok: true, imported: inserted?.length || 0 };
 }
+
+/**
+ * FEATURE (Template sync): full two-way reconcile against the connected WABA.
+ *
+ * Templates live on the WhatsApp Business Account (waba_id) — NOT the phone
+ * number and NOT the Meta app. So when a business switches WABA (e.g. moves to a
+ * test number), its old templates no longer exist on the new WABA and Meta
+ * rejects sends with "(#132001) Template name does not exist in the
+ * translation". The existing helpers each cover only half the problem:
+ *   • importTemplatesFromMeta adds WABA templates missing locally, and
+ *   • refreshTemplateStatuses updates statuses but SKIPS rows not found on Meta.
+ * Neither demotes a local "approved" template that is absent from the current
+ * WABA — so the campaign UI keeps offering phantoms that always fail.
+ *
+ * This single call fetches the live list once and reconciles in three ways:
+ *   1. ADD     — insert Meta templates we don't have locally.
+ *   2. UPDATE  — sync the status of locals that exist on this WABA.
+ *   3. DEMOTE  — any local template absent from this WABA that was Meta-managed
+ *                or still marked "approved" is reset to "local" (and unlinked),
+ *                removing it from campaign selection until re-submitted here.
+ *
+ * Outbound-only (server -> Meta), so it works on localhost too.
+ */
+export async function syncTemplatesFromMeta(businessId: string) {
+  const { data: business } = await supabase
+    .from("businesses")
+    .select("waba_id, access_token, connection_status")
+    .eq("id", businessId)
+    .single();
+
+  if (!business || business.connection_status !== "connected" || !business.waba_id || !business.access_token) {
+    return { ok: false, error: "WhatsApp is not connected. Connect it in Settings first." };
+  }
+
+  const token = decrypt(business.access_token);
+
+  // One fetch, WITH components (so we can reconstruct bodies for added rows).
+  const graphVersion = process.env.META_GRAPH_VERSION || "v18.0";
+  const url =
+    `https://graph.facebook.com/${graphVersion}/${business.waba_id}/message_templates` +
+    `?fields=name,status,category,language,id,rejected_reason,components&limit=200`;
+
+  let metaTemplates: any[] = [];
+  try {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data?.error?.message || "Failed to fetch templates from Meta." };
+    }
+    metaTemplates = Array.isArray(data?.data) ? data.data : [];
+  } catch (e: any) {
+    return { ok: false, error: e?.message || "Could not reach Meta." };
+  }
+
+  // Index Meta templates by name (first language row wins for lookup).
+  const metaByName: Record<string, any> = {};
+  for (const m of metaTemplates) {
+    if (m?.name && !metaByName[m.name]) metaByName[m.name] = m;
+  }
+
+  // Snapshot of local rows BEFORE we add anything.
+  const { data: locals } = await supabase
+    .from("templates")
+    .select("id, name, meta_template_name, status")
+    .eq("business_id", businessId);
+
+  const localNames = new Set<string>();
+  for (const l of locals || []) {
+    if (l.name) localNames.add(String(l.name));
+    if (l.meta_template_name) localNames.add(String(l.meta_template_name));
+  }
+
+  let added = 0;
+  let updated = 0;
+  let demoted = 0;
+
+  // 1) ADD — Meta templates with no local row.
+  const rows: any[] = [];
+  for (const m of metaTemplates) {
+    const metaName: string = m.name;
+    if (!metaName || localNames.has(metaName)) continue;
+    localNames.add(metaName); // guard duplicate language rows within this loop
+
+    const bodyComp = (m.components || []).find(
+      (c: any) => String(c.type).toUpperCase() === "BODY"
+    );
+    const rawBody = bodyComp?.text || "";
+    const examples: unknown[] = bodyComp?.example?.body_text?.[0] || [];
+    const { body, variables } = namedBodyFromComponent(rawBody, examples);
+
+    const status = META_STATUS_MAP[String(m.status).toUpperCase()] || "approved";
+    const rejection =
+      status === "rejected"
+        ? m.rejected_reason && m.rejected_reason !== "NONE"
+          ? m.rejected_reason
+          : "Rejected by Meta"
+        : null;
+
+    rows.push({
+      business_id: businessId,
+      name: metaName,
+      body,
+      variables,
+      image_urls: null,
+      language: m.language || "en_US",
+      status,
+      meta_template_id: m.id ? String(m.id) : null,
+      meta_template_name: metaName,
+      rejection_reason: rejection,
+      submitted_at: new Date().toISOString(),
+    });
+  }
+  if (rows.length) {
+    const { data: ins, error } = await supabase.from("templates").insert(rows).select("id");
+    if (error) return { ok: false, error: error.message };
+    added = ins?.length || 0;
+  }
+
+  // 2) UPDATE statuses for locals present on this WABA; 3) DEMOTE phantoms.
+  for (const local of locals || []) {
+    const lookupName = (local.meta_template_name as string) || (local.name as string);
+    const meta = lookupName ? metaByName[lookupName] : undefined;
+
+    if (meta) {
+      const newStatus = META_STATUS_MAP[String(meta.status).toUpperCase()] || local.status;
+      const patch: any = {
+        rejection_reason:
+          newStatus === "rejected"
+            ? meta.rejected_reason && meta.rejected_reason !== "NONE"
+              ? meta.rejected_reason
+              : "Rejected by Meta"
+            : null,
+      };
+      if (newStatus !== local.status) patch.status = newStatus;
+      if (meta.id) patch.meta_template_id = String(meta.id);
+      if (!local.meta_template_name) patch.meta_template_name = lookupName;
+
+      await supabase.from("templates").update(patch).eq("id", local.id);
+      if (patch.status) updated++;
+    } else {
+      // Absent from this WABA. Only demote rows that were Meta-managed or are
+      // still "approved" — leave genuinely-local/pending drafts untouched.
+      const wasMetaManaged = !!local.meta_template_name;
+      if (wasMetaManaged || local.status === "approved") {
+        await supabase
+          .from("templates")
+          .update({
+            status: "local",
+            meta_template_id: null,
+            meta_template_name: null,
+            rejection_reason:
+              "Not on the connected WhatsApp account (different WABA). Re-submit to use it here.",
+          })
+          .eq("id", local.id);
+        demoted++;
+      }
+    }
+  }
+
+  return { ok: true, added, updated, demoted };
+}

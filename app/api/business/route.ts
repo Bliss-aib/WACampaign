@@ -3,6 +3,7 @@ import { supabase } from "@/lib/db/client";
 import { encrypt } from "@/lib/encrypt";
 import { getUserId, getOrCreateBusinessId } from "@/lib/auth";
 import { businessConnectSchema } from "@/lib/validation";
+import { syncTemplatesFromMeta } from "@/lib/submit-template";
 
 export async function GET() {
   const userId = await getUserId();
@@ -74,6 +75,17 @@ export async function POST(req: Request) {
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Auto-reconcile templates against the (possibly new) WABA so the campaign UI
+  // immediately reflects what Meta will actually accept — adds the WABA's real
+  // templates and demotes phantoms left over from a previous WABA. Best-effort:
+  // a sync failure must not block a successful connection.
+  try {
+    await syncTemplatesFromMeta(data.id);
+  } catch (e: any) {
+    console.error("[business] template sync after connect failed:", e?.message);
+  }
+
   return NextResponse.json({ business: data });
 }
 
