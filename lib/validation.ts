@@ -14,8 +14,15 @@ export const campaignCreateSchema = z.object({
   // FIX (H1): contactIds must be a non-empty array of uuids. The old code did
   // `contactIds.length` with no guard and threw when it was missing/not an array.
   contactIds: z.array(z.string().uuid()).min(1, "Select at least one contact"),
-  // Accept an ISO datetime string or null/omitted (send-now).
-  scheduledAt: z.string().datetime({ offset: true }).nullable().optional(),
+  // FIX (regression): the UI's <input type="datetime-local"> sends a value like
+  // "2026-06-11T15:00" — no timezone offset and no seconds — so the stricter
+  // z.string().datetime({offset:true}) rejected every real submission. Accept any
+  // parseable date string; null/empty means "send now" (draft).
+  scheduledAt: z
+    .string()
+    .nullable()
+    .optional()
+    .refine((v) => v == null || v === "" || !Number.isNaN(Date.parse(v)), "Invalid date"),
   // Per-campaign template variable values (same for every recipient).
   variableValues: z.record(z.string(), z.string()).optional(),
 });
