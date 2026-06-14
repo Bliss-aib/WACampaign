@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/db/client";
 import { getUserId, getOrCreateBusinessId } from "@/lib/auth";
-import { removeCampaignJob } from "@/lib/queue";
 import { campaignStatusUpdateSchema } from "@/lib/validation";
 
 async function getBusinessId(userId: string) {
@@ -44,9 +43,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
   const { id } = await params;
 
-  // FIX (H2): validate status against an allow-list. Previously any string was
-  // accepted, so a user could PATCH status:"sending"/"completed" and bypass the
-  // queue/worker logic. Only user-settable states are permitted here.
+  // FIX (H2): validate status against an allow-list. Only user-settable states
+  // are permitted — system states (sending/completed/failed/scheduled) are
+  // managed by the sender, so users can't force them.
   const parsed = campaignStatusUpdateSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json(
@@ -65,14 +64,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
   if (!campaign) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  // FIX (H3): the user-settable targets (cancelled/paused/draft) are all
-  // non-scheduled, so if the campaign is currently 'scheduled' this PATCH always
-  // moves it off the schedule — remove the queued BullMQ job so it doesn't still
-  // fire at the scheduled time and send an unwanted campaign.
-  if (campaign.status === "scheduled") {
-    await removeCampaignJob(id);
-  }
-
+  // Cancel/pause/draft simply update the status. The cron sender only processes
+  // campaigns in 'scheduled'/'sending', so a cancelled/paused/draft campaign is
+  // naturally skipped — no queue job to remove anymore.
   const { data, error } = await supabase
     .from("campaigns")
     .update({ status, updated_at: new Date().toISOString() })
@@ -94,8 +88,6 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
   if (!businessId) return NextResponse.json({ error: "Business not found" }, { status: 404 });
 
   const { id } = await params;
-
-  await removeCampaignJob(id);
 
   const { error } = await supabase.from("campaigns").delete().eq("id", id).eq("business_id", businessId);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
