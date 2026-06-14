@@ -4,6 +4,18 @@ import { supabase } from "../lib/db/client";
 import { decrypt } from "../lib/encrypt";
 import { sendWhatsAppMessage } from "../lib/meta";
 
+// ── Production env validation ──────────────────────────────────────────────
+// The worker runs on a long-lived host (e.g. Render/Railway), separate from
+// Vercel. Fail fast with a clear message if anything required is missing so a
+// misconfigured deploy doesn't silently no-op. ENCRYPTION_KEY must be IDENTICAL
+// to the value the web app uses, or stored Meta tokens won't decrypt.
+for (const name of ["REDIS_URL", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "ENCRYPTION_KEY"]) {
+  if (!process.env[name]) {
+    console.error(`[worker] Missing required env var: ${name}. Exiting.`);
+    process.exit(1);
+  }
+}
+
 const worker = new Worker(
   "campaign-queue",
   async (job) => {
@@ -175,3 +187,24 @@ worker.on("failed", (job, err) => {
 });
 
 console.log("Campaign worker started");
+
+// ── FIX (M10): graceful shutdown ───────────────────────────────────────────
+// Hosts send SIGTERM before restarting/redeploying. Close the worker so any
+// in-flight job finishes and the worker deregisters cleanly — otherwise a job
+// killed mid-send leaves its contacts stuck in 'sending' (not auto-resent).
+let shuttingDown = false;
+async function shutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[worker] ${signal} received — shutting down gracefully...`);
+  try {
+    await worker.close();
+    console.log("[worker] closed cleanly.");
+  } catch (e) {
+    console.error("[worker] error during shutdown:", e);
+  } finally {
+    process.exit(0);
+  }
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
