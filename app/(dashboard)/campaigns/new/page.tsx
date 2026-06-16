@@ -60,9 +60,13 @@ export default function NewCampaignPage() {
         name,
         templateId: selectedTemplate,
         contactIds: selectedContacts,
-        scheduledAt: immediate ? null : schedule || null,
+        // FIX (timezone): the datetime-local input gives a naive string like
+        // "2026-06-14T21:09" with no zone. Convert it to a real UTC ISO here in
+        // the browser — where the user's timezone is known — so the server
+        // stores the correct instant. "Start Campaign Now" sends the current
+        // instant; scheduling sends the chosen time.
+        scheduledAt: immediate ? new Date().toISOString() : schedule ? new Date(schedule).toISOString() : null,
         variableValues, // FEATURE (Option A)
-        immediate,
       }),
     });
     // FIX (H6): the old code redirected to /campaigns on BOTH success and

@@ -10,7 +10,7 @@ import { mockTemplates, Template } from "@/lib/mock-data";
 // FIX #2 / #3: use toast notifications so save/delete failures are visible to the
 // user instead of being silently swallowed.
 import { toast } from "sonner";
-// FEATURE (Option A): manual status refresh from Meta.
+// FEATURE (Template sync): one button to fully reconcile against the WABA.
 import { RefreshCw } from "lucide-react";
 
 export default function TemplatesPage() {
@@ -19,8 +19,8 @@ export default function TemplatesPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [prefill, setPrefill] = useState<{ name: string; body: string; imageUrls?: string[] } | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
-  // FEATURE (Option A): track the refresh-from-Meta in-flight state.
-  const [refreshing, setRefreshing] = useState(false);
+  // FEATURE (Template sync): track the sync-with-Meta in-flight state.
+  const [syncing, setSyncing] = useState(false);
 
   const fetchTemplates = () => {
     setLoading(true);
@@ -79,25 +79,29 @@ export default function TemplatesPage() {
     }
   };
 
-  // FEATURE (Option A): Pull the latest approval statuses from Meta on demand.
-  // Works on localhost (outbound call) where the approval webhook can't reach us.
-  const handleRefreshStatus = async () => {
-    setRefreshing(true);
+  // FEATURE (Template sync): one-click full reconcile against the connected WABA.
+  // Adds the WABA's real templates, refreshes statuses, and demotes phantoms that
+  // no longer exist on this WABA (so they can't be picked for a campaign and fail
+  // with #132001). Outbound-only, so it works on localhost too.
+  const handleSync = async () => {
+    setSyncing(true);
     try {
-      const res = await fetch("/api/templates/refresh", { method: "POST" });
+      const res = await fetch("/api/templates/sync", { method: "POST" });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
+        const parts: string[] = [];
+        if (data.added) parts.push(`${data.added} added`);
+        if (data.updated) parts.push(`${data.updated} updated`);
+        if (data.demoted) parts.push(`${data.demoted} removed`);
         toast.success(
-          data.updated > 0
-            ? `Updated ${data.updated} template${data.updated > 1 ? "s" : ""} from Meta`
-            : "All templates are already up to date"
+          parts.length ? `Synced with Meta — ${parts.join(", ")}` : "Already in sync with Meta"
         );
         fetchTemplates();
       } else {
-        toast.error(data.error || "Failed to refresh statuses from Meta");
+        toast.error(data.error || "Failed to sync templates with Meta");
       }
     } finally {
-      setRefreshing(false);
+      setSyncing(false);
     }
   };
 
@@ -165,15 +169,16 @@ export default function TemplatesPage() {
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-black">My Templates</h2>
           <div className="flex items-center gap-2">
-            {/* FEATURE (Option A): manual "Refresh status" from Meta */}
+            {/* FEATURE (Template sync): one button — adds the WABA's templates,
+                refreshes statuses, and removes phantoms from other WABAs. */}
             <button
-              onClick={handleRefreshStatus}
-              disabled={refreshing}
+              onClick={handleSync}
+              disabled={syncing}
               className="flex items-center gap-1.5 rounded-md border border-zinc-200 px-3 py-2 text-sm text-black hover:bg-zinc-50 disabled:opacity-50"
-              title="Pull the latest approval statuses from Meta"
+              title="Reconcile your templates with your connected WhatsApp account: import its templates, refresh statuses, and remove ones that aren't on it"
             >
-              <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
-              {refreshing ? "Refreshing..." : "Refresh status"}
+              <RefreshCw className={`h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />
+              {syncing ? "Syncing..." : "Sync with Meta"}
             </button>
             <CreateTemplateModal onCreate={handleSave} />
           </div>

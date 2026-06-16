@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/db/client";
 import { getUserId, getOrCreateBusinessId } from "@/lib/auth";
-import { scheduleCampaign, startCampaignNow } from "@/lib/queue";
 import { campaignCreateSchema } from "@/lib/validation";
 
 export async function GET(req: Request) {
@@ -58,7 +57,7 @@ export async function POST(req: Request) {
   }
   // FEATURE (Option A): variableValues holds the values for non-name template
   // variables (e.g. { business, discount, code, link }), applied to every recipient.
-  const { name, templateId, contactIds, scheduledAt, variableValues, immediate } = parsed.data;
+  const { name, templateId, contactIds, scheduledAt, variableValues } = parsed.data;
 
   const { data: business } = await supabase
     .from("businesses")
@@ -95,6 +94,11 @@ export async function POST(req: Request) {
     );
   }
 
+  // Scheduling is now purely DB-driven: the cron sender
+  // (/api/cron/process-campaigns) processes campaigns whose scheduled_at has
+  // passed. A missing schedule means "send now" (scheduled_at = now()).
+  const scheduledTime = scheduledAt ? new Date(scheduledAt).toISOString() : new Date().toISOString();
+
   // Insert campaign
   const { data: campaign, error: campaignError } = await supabase
     .from("campaigns")
@@ -102,8 +106,8 @@ export async function POST(req: Request) {
       business_id: business.id,
       template_id: templateId,
       name,
-      status: immediate ? "scheduled" : scheduledAt ? "scheduled" : "draft",
-      scheduled_at: immediate ? new Date().toISOString() : scheduledAt || null,
+      status: "scheduled",
+      scheduled_at: scheduledTime,
       total_contacts: contactIds.length,
       variable_values: variableValues || {}, // FEATURE (Option A)
     })
@@ -124,13 +128,6 @@ export async function POST(req: Request) {
   const { error: junctionError } = await supabase.from("campaign_contacts").insert(rows);
   if (junctionError) {
     return NextResponse.json({ error: junctionError.message }, { status: 500 });
-  }
-
-  // Schedule or start immediately
-  if (immediate) {
-    await startCampaignNow(campaign.id);
-  } else if (scheduledAt) {
-    await scheduleCampaign(campaign.id, new Date(scheduledAt));
   }
 
   return NextResponse.json({ campaign });

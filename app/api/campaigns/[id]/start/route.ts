@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/db/client";
 import { getUserId, getOrCreateBusinessId } from "@/lib/auth";
-import { removeCampaignJob, startCampaignNow } from "@/lib/queue";
 
 async function getBusinessId(userId: string) {
   const { data } = await supabase.from("businesses").select("id").eq("user_id", userId).single();
@@ -11,9 +10,9 @@ async function getBusinessId(userId: string) {
 /**
  * FEATURE: Start a campaign immediately from the dashboard.
  *
- * - Draft campaigns are queued right away.
- * - Scheduled campaigns have their old delayed job removed, are set to send now,
- *   and are re-queued with no delay.
+ * - Draft/scheduled/paused campaigns are set to send now.
+ * - The Supabase cron sender (/api/cron/process-campaigns) picks up campaigns
+ *   whose scheduled_at has passed and processes them.
  * - Campaigns already in terminal/progress states cannot be restarted.
  */
 export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -42,9 +41,6 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     );
   }
 
-  // Remove any existing scheduled job so it doesn't fire twice.
-  await removeCampaignJob(id);
-
   const now = new Date().toISOString();
   const { data, error } = await supabase
     .from("campaigns")
@@ -55,8 +51,6 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-
-  await startCampaignNow(id);
 
   return NextResponse.json({ campaign: data });
 }
