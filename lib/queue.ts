@@ -34,3 +34,21 @@ export async function removeCampaignJob(campaignId: string) {
     await job.remove();
   }
 }
+
+/**
+ * FEATURE: queue a campaign to be sent immediately (no delay).
+ * Used by the "Start campaign now" button.
+ */
+export async function startCampaignNow(campaignId: string) {
+  const campaignQueue = getCampaignQueue();
+  await campaignQueue.add(
+    "send-campaign",
+    { campaignId },
+    {
+      jobId: campaignId,
+      delay: 0,
+      attempts: 3,
+      backoff: { type: "exponential", delay: 5000 },
+    }
+  );
+}

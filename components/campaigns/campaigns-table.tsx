@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import {
   Table,
   TableBody,
@@ -9,11 +10,21 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Button } from "@/components/ui/button";
 import { CampaignStatusBadge } from "./campaign-status-badge";
 import { Campaign } from "@/lib/mock-data";
 import { format } from "date-fns";
+import { toast } from "sonner";
 
-export function CampaignsTable({ campaigns }: { campaigns: Campaign[] }) {
+const STARTABLE_STATUSES = ["draft", "scheduled", "paused"];
+
+export function CampaignsTable({
+  campaigns,
+  onChange,
+}: {
+  campaigns: Campaign[];
+  onChange?: () => void;
+}) {
   if (campaigns.length === 0) {
     return (
       <div className="flex h-40 items-center justify-center rounded-lg border border-zinc-200 bg-white">
@@ -32,6 +43,7 @@ export function CampaignsTable({ campaigns }: { campaigns: Campaign[] }) {
             <TableHead className="text-zinc-500">Status</TableHead>
             <TableHead className="text-zinc-500">Scheduled</TableHead>
             <TableHead className="text-zinc-500">Stats</TableHead>
+            <TableHead className="text-zinc-500">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -58,10 +70,55 @@ export function CampaignsTable({ campaigns }: { campaigns: Campaign[] }) {
                 {campaign.sentCount}/{campaign.deliveredCount}/{campaign.readCount}
                 <span className="ml-1 text-xs text-zinc-400">(sent/deliv/read)</span>
               </TableCell>
+              <TableCell>
+                <CampaignActions campaign={campaign} onChange={onChange} />
+              </TableCell>
             </TableRow>
           ))}
         </TableBody>
       </Table>
     </div>
+  );
+}
+
+function CampaignActions({
+  campaign,
+  onChange,
+}: {
+  campaign: Campaign;
+  onChange?: () => void;
+}) {
+  const [loading, setLoading] = useState(false);
+
+  if (!STARTABLE_STATUSES.includes(campaign.status)) {
+    return <span className="text-xs text-zinc-400">—</span>;
+  }
+
+  const handleStart = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/campaigns/${campaign.id}/start`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        toast.error(err.error || "Failed to start campaign");
+        return;
+      }
+      toast.success("Campaign started");
+      onChange?.();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      disabled={loading}
+      onClick={handleStart}
+      className="border-zinc-200 text-black hover:bg-zinc-50 disabled:bg-zinc-200 disabled:text-zinc-400"
+    >
+      {loading ? "Starting..." : "Start Now"}
+    </Button>
   );
 }

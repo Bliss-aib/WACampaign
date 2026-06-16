@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/db/client";
 import { getUserId, getOrCreateBusinessId } from "@/lib/auth";
-import { scheduleCampaign, removeCampaignJob } from "@/lib/queue";
+import { scheduleCampaign, startCampaignNow } from "@/lib/queue";
 import { campaignCreateSchema } from "@/lib/validation";
 
 export async function GET(req: Request) {
@@ -58,7 +58,7 @@ export async function POST(req: Request) {
   }
   // FEATURE (Option A): variableValues holds the values for non-name template
   // variables (e.g. { business, discount, code, link }), applied to every recipient.
-  const { name, templateId, contactIds, scheduledAt, variableValues } = parsed.data;
+  const { name, templateId, contactIds, scheduledAt, variableValues, immediate } = parsed.data;
 
   const { data: business } = await supabase
     .from("businesses")
@@ -102,8 +102,8 @@ export async function POST(req: Request) {
       business_id: business.id,
       template_id: templateId,
       name,
-      status: scheduledAt ? "scheduled" : "draft",
-      scheduled_at: scheduledAt || null,
+      status: immediate ? "scheduled" : scheduledAt ? "scheduled" : "draft",
+      scheduled_at: immediate ? new Date().toISOString() : scheduledAt || null,
       total_contacts: contactIds.length,
       variable_values: variableValues || {}, // FEATURE (Option A)
     })
@@ -126,8 +126,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: junctionError.message }, { status: 500 });
   }
 
-  // Schedule if needed
-  if (scheduledAt) {
+  // Schedule or start immediately
+  if (immediate) {
+    await startCampaignNow(campaign.id);
+  } else if (scheduledAt) {
     await scheduleCampaign(campaign.id, new Date(scheduledAt));
   }
 

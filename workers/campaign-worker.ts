@@ -4,6 +4,11 @@ import { supabase } from "../lib/db/client";
 import { decrypt } from "../lib/encrypt";
 import { sendWhatsAppMessage } from "../lib/meta";
 
+// Number of messages the worker processes in parallel. Higher = faster campaigns,
+// but Meta may throttle or rate-limit if you send too aggressively. 5 is a safe
+// default; adjust via WORKER_CONCURRENCY env var if your WABA has higher limits.
+const WORKER_CONCURRENCY = Math.max(1, parseInt(process.env.WORKER_CONCURRENCY || "5", 10));
+
 const worker = new Worker(
   "campaign-queue",
   async (job) => {
@@ -163,7 +168,7 @@ const worker = new Worker(
       })
       .eq("id", campaignId);
   },
-  { connection: getRedis(), concurrency: 1 }
+  { connection: getRedis(), concurrency: WORKER_CONCURRENCY }
 );
 
 worker.on("completed", (job) => {

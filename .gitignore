@@ -42,3 +42,17 @@ next-env.d.ts
 
 # clerk configuration (can include secrets)
 /.clerk/
+
+# local secrets and helper scripts
+/docs/clerk-google-oauth.txt
+/generate-encryption-key.js
+/update-env.js
+
+# screenshots and temp images
+/public/screenshot*.png
+/public/Screenshot*.png
+/public/*-envs.png
+/public/latest-*.png
+/public/warning.png
+/public/supabase-*.png
+/public/vercel-*.png

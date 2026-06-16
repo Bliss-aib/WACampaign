@@ -6,6 +6,59 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { Eye, EyeOff, Copy } from "lucide-react";
+import { toast } from "sonner";
+
+function maskValue(value: string) {
+  if (!value || value.length <= 4) return value;
+  return `xxxx${value.slice(-4)}`;
+}
+
+function CopyableId({ label, value }: { label: string; value: string }) {
+  const [show, setShow] = useState(false);
+  const [showCopy, setShowCopy] = useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(value);
+    toast.success(`${label} copied`);
+  };
+
+  return (
+    <div className="flex items-center justify-between text-sm">
+      <span className="text-zinc-500">{label}</span>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setShowCopy(true)}
+          className="font-mono text-black hover:underline"
+          title="Click to reveal copy option"
+        >
+          {show ? value : maskValue(value)}
+        </button>
+        {showCopy && (
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={handleCopy}
+            className="h-6 w-6 text-zinc-500 hover:text-black"
+          >
+            <Copy className="h-3.5 w-3.5" />
+          </Button>
+        )}
+        <Button
+          size="icon"
+          variant="ghost"
+          onClick={() => {
+            setShow((s) => !s);
+            setShowCopy(false);
+          }}
+          className="h-6 w-6 text-zinc-500 hover:text-black"
+        >
+          {show ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 export function WhatsAppConnectionCard({
   business,
@@ -45,14 +98,8 @@ export function WhatsAppConnectionCard({
               <span className="text-sm font-medium text-black">Connected</span>
             </div>
             <div className="space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-zinc-500">WABA ID</span>
-                <span className="font-mono text-black">{business.wabaId}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-zinc-500">Phone Number ID</span>
-                <span className="font-mono text-black">{business.phoneNumberId}</span>
-              </div>
+              <CopyableId label="WABA ID" value={business.wabaId} />
+              <CopyableId label="Phone Number ID" value={business.phoneNumberId} />
             </div>
             <Separator className="bg-zinc-100" />
             <div className="flex gap-2">

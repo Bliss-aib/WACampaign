@@ -18,6 +18,8 @@ export const campaignCreateSchema = z.object({
   scheduledAt: z.string().datetime({ offset: true }).nullable().optional(),
   // Per-campaign template variable values (same for every recipient).
   variableValues: z.record(z.string(), z.string()).optional(),
+  // FEATURE: send the campaign immediately instead of scheduling it.
+  immediate: z.boolean().optional(),
 });
 
 export type CampaignCreateInput = z.infer<typeof campaignCreateSchema>;

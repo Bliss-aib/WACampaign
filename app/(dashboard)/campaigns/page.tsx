@@ -12,6 +12,7 @@ const filters: { label: string; value: CampaignStatus | "all" }[] = [
   { label: "All", value: "all" },
   { label: "Scheduled", value: "scheduled" },
   { label: "Sending", value: "sending" },
+  { label: "Paused", value: "paused" },
   { label: "Completed", value: "completed" },
   { label: "Draft", value: "draft" },
 ];
@@ -67,7 +68,7 @@ export default function CampaignsPage() {
       {loading ? (
         <Skeleton className="h-64 rounded-lg" />
       ) : (
-        <CampaignsTable campaigns={campaigns} />
+        <CampaignsTable campaigns={campaigns} onChange={() => fetchCampaigns(activeFilter)} />
       )}
     </div>
   );

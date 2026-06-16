@@ -4,7 +4,13 @@ function createSupabaseClient() {
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  if (!supabaseUrl || !supabaseServiceRoleKey) {
+  // FIX: placeholder values like "<your-supabase-url-here>" are truthy but invalid,
+  // causing createClient to throw at runtime. Treat them as missing.
+  const isValidUrl =
+    typeof supabaseUrl === "string" &&
+    (supabaseUrl.startsWith("http://") || supabaseUrl.startsWith("https://"));
+
+  if (!isValidUrl || !supabaseServiceRoleKey) {
     console.warn("[Supabase] SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set. Using fallback client.");
     return createStubClient();
   }

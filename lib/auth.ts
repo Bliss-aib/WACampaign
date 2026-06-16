@@ -76,3 +76,15 @@ export async function getOrCreateBusinessId(userId: string): Promise<string | nu
     .single();
   return created?.id ?? null;
 }
+
+/**
+ * Returns the current user's business record (id + onboarding status), or null.
+ */
+export async function getCurrentBusiness(userId: string) {
+  const { data } = await supabase
+    .from("businesses")
+    .select("id, onboarding_completed")
+    .eq("user_id", userId)
+    .single();
+  return data ?? null;
+}

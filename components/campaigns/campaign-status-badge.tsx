@@ -8,6 +8,7 @@ const styles: Record<CampaignStatus, string> = {
   completed: "bg-zinc-100 text-zinc-600 hover:bg-zinc-100",
   cancelled: "bg-zinc-100 text-zinc-600 hover:bg-zinc-100",
   failed: "bg-zinc-200 text-zinc-800 hover:bg-zinc-200",
+  paused: "bg-amber-100 text-amber-700 hover:bg-amber-100",
 };
 
 export function CampaignStatusBadge({ status }: { status: CampaignStatus }) {

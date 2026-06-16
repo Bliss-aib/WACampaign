@@ -51,7 +51,7 @@ export default function NewCampaignPage() {
   const fillableVars: string[] = (selectedTemplateObj?.variables || []).filter((v: string) => v !== "name");
   const allVarsFilled = fillableVars.every((v) => (variableValues[v] || "").trim().length > 0);
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (immediate: boolean) => {
     setSubmitting(true);
     const res = await fetch("/api/campaigns", {
       method: "POST",
@@ -60,8 +60,9 @@ export default function NewCampaignPage() {
         name,
         templateId: selectedTemplate,
         contactIds: selectedContacts,
-        scheduledAt: schedule || null,
+        scheduledAt: immediate ? null : schedule || null,
         variableValues, // FEATURE (Option A)
+        immediate,
       }),
     });
     // FIX (H6): the old code redirected to /campaigns on BOTH success and
@@ -77,11 +78,18 @@ export default function NewCampaignPage() {
     }
   };
 
-  const canSubmit =
+  const canSchedule =
     name.trim() &&
     selectedTemplate &&
     selectedContacts.length > 0 &&
     schedule &&
+    allVarsFilled && // FEATURE (Option A): all non-name variables must have a value
+    !submitting;
+
+  const canStartNow =
+    name.trim() &&
+    selectedTemplate &&
+    selectedContacts.length > 0 &&
     allVarsFilled && // FEATURE (Option A): all non-name variables must have a value
     !submitting;
 
@@ -101,7 +109,7 @@ export default function NewCampaignPage() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold text-black">New Campaign</h2>
-          <p className="text-sm text-zinc-500">Select a template, contacts, and schedule.</p>
+          <p className="text-sm text-zinc-500">Select a template and contacts, then schedule or send now.</p>
         </div>
         <Link href="/campaigns">
           <Button variant="outline" className="border-zinc-200 text-black hover:bg-zinc-50">
@@ -180,7 +188,7 @@ export default function NewCampaignPage() {
       <Separator className="bg-zinc-100" />
 
       <div className="space-y-3">
-        <h3 className="text-sm font-medium text-black">3. Schedule</h3>
+        <h3 className="text-sm font-medium text-black">3. Schedule (optional)</h3>
         <SchedulePicker value={schedule} onChange={setSchedule} />
       </div>
 
@@ -200,8 +208,8 @@ export default function NewCampaignPage() {
             <span className="font-medium text-black">Contacts:</span> {selectedContacts.length}
           </p>
           <p className="mt-1">
-            <span className="font-medium text-black">Scheduled:</span>{" "}
-            {schedule ? new Date(schedule).toLocaleString() : "—"}
+            <span className="font-medium text-black">Send:</span>{" "}
+            {schedule ? new Date(schedule).toLocaleString() : "Immediately if Start Campaign Now is clicked"}
           </p>
         </div>
       </div>
@@ -213,11 +221,19 @@ export default function NewCampaignPage() {
           </Button>
         </Link>
         <Button
-          disabled={!canSubmit}
-          onClick={handleSubmit}
+          disabled={!canStartNow}
+          onClick={() => handleSubmit(true)}
+          variant="outline"
+          className="border-zinc-200 text-black hover:bg-zinc-50 disabled:bg-zinc-200 disabled:text-zinc-400"
+        >
+          {submitting ? "Starting..." : "Start Campaign Now"}
+        </Button>
+        <Button
+          disabled={!canSchedule}
+          onClick={() => handleSubmit(false)}
           className="bg-black text-white hover:bg-zinc-800 disabled:bg-zinc-200 disabled:text-zinc-400"
         >
-          {submitting ? "Creating..." : "Create Campaign"}
+          {submitting ? "Scheduling..." : "Schedule Campaign"}
         </Button>
       </div>
     </div>

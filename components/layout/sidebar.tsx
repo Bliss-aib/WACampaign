@@ -10,6 +10,8 @@ import {
   BarChart3,
   MessageCircle,
   Settings,
+  BookOpen,
+  Gauge,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -20,6 +22,8 @@ const navItems = [
   { label: "Contacts", href: "/contacts", icon: Users },
   { label: "Templates", href: "/templates", icon: FileText },
   { label: "Analytics", href: "/analytics", icon: BarChart3 },
+  { label: "Usage", href: "/usage", icon: Gauge },
+  { label: "Guide", href: "/guide", icon: BookOpen },
   { label: "Settings", href: "/settings", icon: Settings },
 ];
 

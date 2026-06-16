@@ -4,7 +4,8 @@ export type CampaignStatus =
   | "sending"
   | "completed"
   | "cancelled"
-  | "failed";
+  | "failed"
+  | "paused";
 
 export interface Campaign {
   id: string;
