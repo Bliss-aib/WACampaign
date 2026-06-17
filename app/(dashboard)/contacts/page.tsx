@@ -7,6 +7,9 @@ import { UploadCSVModal } from "@/components/contacts/upload-csv-modal";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { mockContacts } from "@/lib/mock-data";
+// FIX: surface save/delete failures instead of silently faking them in local
+// state (which made adds "disappear" on refresh — the reported bug).
+import { toast } from "sonner";
 
 export default function ContactsPage() {
   const [contacts, setContacts] = useState<any[]>([]);
@@ -58,22 +61,30 @@ export default function ContactsPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, phone_number: phone }),
     });
-    if (res.ok) fetchContacts(search);
-    else {
-      const newContact = {
-        id: Math.random().toString(36).slice(2),
-        name,
-        phoneNumber: phone,
-        createdAt: new Date().toISOString(),
-      };
-      setContacts((prev) => [newContact, ...prev]);
+    // FIX: previously a failed POST faked the contact in local state, so it
+    // looked added but was never saved and vanished on refresh (the reported
+    // "not saving" bug — usually a duplicate phone number). Only refresh from
+    // the server on success; otherwise show the real error.
+    if (res.ok) {
+      toast.success("Contact added");
+      fetchContacts(search);
+    } else {
+      const err = await res.json().catch(() => ({}));
+      toast.error(err.error || "Failed to add contact");
     }
   };
 
   const handleDelete = async (id: string) => {
     const res = await fetch(`/api/contacts/${id}`, { method: "DELETE" });
-    if (res.ok) fetchContacts(search);
-    else setContacts((prev) => prev.filter((c) => c.id !== id));
+    // FIX: same masking problem on delete — only remove from the UI when the
+    // server actually deleted it.
+    if (res.ok) {
+      toast.success("Contact deleted");
+      fetchContacts(search);
+    } else {
+      const err = await res.json().catch(() => ({}));
+      toast.error(err.error || "Failed to delete contact");
+    }
   };
 
   const handleUpload = async (file: File) => {
@@ -83,7 +94,19 @@ export default function ContactsPage() {
       method: "POST",
       body: formData,
     });
-    if (res.ok) fetchContacts(search);
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      const added = typeof data.added === "number" ? data.added : undefined;
+      const skipped = typeof data.skipped === "number" ? data.skipped : undefined;
+      toast.success(
+        added != null
+          ? `Imported ${added} contact${added === 1 ? "" : "s"}${skipped ? `, ${skipped} skipped` : ""}`
+          : "Contacts imported"
+      );
+      fetchContacts(search);
+    } else {
+      toast.error(data.error || "Failed to import contacts");
+    }
   };
 
   return (

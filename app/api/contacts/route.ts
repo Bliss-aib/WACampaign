@@ -76,6 +76,17 @@ export async function POST(req: Request) {
     .select()
     .single();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) {
+    // UNIQUE (business_id, phone_number): the same number is already saved for
+    // this business. Return a clear 409 instead of a raw 500 so the UI can tell
+    // the user why nothing was added (this is the #1 cause of "it won't save").
+    if ((error as any).code === "23505") {
+      return NextResponse.json(
+        { error: "A contact with this phone number already exists." },
+        { status: 409 }
+      );
+    }
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
   return NextResponse.json({ contact: data });
 }

@@ -78,14 +78,30 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "No valid contacts found" }, { status: 400 });
   }
 
-  const insertRows = contacts.map((c) => ({
-    business_id: businessId,
-    name: c.name,
-    phone_number: c.phone_number,
-  }));
+  // De-duplicate within the file itself first (two identical phones in one CSV
+  // would otherwise collide on the unique index).
+  const seen = new Set<string>();
+  const insertRows = contacts
+    .filter((c) => {
+      if (seen.has(c.phone_number)) return false;
+      seen.add(c.phone_number);
+      return true;
+    })
+    .map((c) => ({ business_id: businessId, name: c.name, phone_number: c.phone_number }));
 
-  const { data, error } = await supabase.from("contacts").insert(insertRows).select();
+  // FIX: a plain batch insert is atomic — one phone that already exists for this
+  // business (UNIQUE business_id, phone_number) made the WHOLE upload fail with a
+  // 500 and nothing was saved. Upsert with ignoreDuplicates does
+  // INSERT ... ON CONFLICT DO NOTHING, so existing numbers are skipped and the
+  // new ones still import. `select()` returns only the rows actually inserted.
+  const { data, error } = await supabase
+    .from("contacts")
+    .upsert(insertRows, { onConflict: "business_id,phone_number", ignoreDuplicates: true })
+    .select();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ inserted: data?.length || 0 });
+
+  const added = data?.length || 0;
+  const skipped = insertRows.length - added;
+  return NextResponse.json({ added, skipped, inserted: added });
 }
