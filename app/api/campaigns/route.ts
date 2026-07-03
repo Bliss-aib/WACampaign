@@ -32,10 +32,23 @@ export async function GET(req: Request) {
   const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  // FIX: the DB returns snake_case columns (sent_count, scheduled_at, …) but every
+  // client consumer (CampaignsTable, the Analytics page, the Campaign type) expects
+  // camelCase. Without mapping, the list's Stats column renders "//" and Scheduled
+  // "—", and the Analytics page crashes on c.totalContacts.toLocaleString() (undefined).
+  // Normalize to camelCase here, matching the contacts/dashboard routes.
   const campaigns = (data || []).map((c: any) => ({
-    ...c,
+    id: c.id,
+    name: c.name,
+    status: c.status,
+    scheduledAt: c.scheduled_at,
+    totalContacts: c.total_contacts,
+    sentCount: c.sent_count,
+    deliveredCount: c.delivered_count,
+    readCount: c.read_count,
+    failedCount: c.failed_count,
     templateName: c.templates?.name || "",
-    templates: undefined,
+    createdAt: c.created_at,
   }));
 
   return NextResponse.json({ campaigns });
